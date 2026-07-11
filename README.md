@@ -3,14 +3,14 @@
 A non-interactive CLI implementation of the water-sort puzzle: pour colored
 liquid between tubes until every tube holds a single color (or is empty).
 
-Every command is a single, independent invocation — no REPL, no long-running
-process. Game state lives entirely in a JSON save file, read and rewritten
-on each call, so the game can be scripted, tested, or driven by any tool
-that can shell out and read JSON.
+Every command is a single, independent invocation backed by a GraphQL API.
+Commands either connect to a remote GraphQL server (pass `--api URL`) or
+spawn an ephemeral local server on a random port (default). Games are
+stateful and identified by UUID — there's no save file; games are held in
+memory and keyed by ID returned from the `new` command.
 
 The bundled 30-level set is compiled into the binary (`go:embed`), so a
-single binary runs anywhere with no extra files — pass `--levels PATH` to
-use a different level set instead.
+single binary runs anywhere with no extra files.
 
 ## Install
 
@@ -29,17 +29,27 @@ go build -o colorsort ./cmd/colorsort
 ## Quick start
 
 ```sh
-./colorsort list                      # see available levels
-./colorsort new --level 1             # start a new game, writes ./save.json
-./colorsort move --from 1 --to 4      # pour tube 1 onto tube 4
-./colorsort show                      # reprint the current board
-./colorsort undo                      # undo the last move
+./colorsort list                                    # see available levels
+./colorsort new --level 1 --json | jq -r '.id'   # start a new game, get its UUID
+./colorsort move --game-id <UUID> --from 1 --to 4 # pour tube 1 onto tube 4
+./colorsort show --game-id <UUID>                  # reprint the current board
+./colorsort undo --game-id <UUID>                  # undo the last move
+```
+
+Or connect to a remote server:
+
+```sh
+./colorsort --api http://localhost:8080/query new --level 1
+./colorsort --api http://localhost:8080/query move --game-id <UUID> --from 1 --to 4
 ```
 
 ## Example: playing level 1
 
 ```console
-$ ./colorsort new --level 1
+$ ./colorsort new --level 1 --json | jq -r '.id'
+8f8f402b-3ba9-4bd9-a3b3-134b8603e808
+
+$ ./colorsort show --game-id 8f8f402b-3ba9-4bd9-a3b3-134b8603e808
 Level 1 | moves: 0 | solved: false
  1: [red red green green]
  2: [blue red blue green]
@@ -47,7 +57,7 @@ Level 1 | moves: 0 | solved: false
  4: []
  5: []
 
-$ ./colorsort move --from 1 --to 4
+$ ./colorsort move --game-id 8f8f402b-3ba9-4bd9-a3b3-134b8603e808 --from 1 --to 4
 Level 1 | moves: 1 | solved: false
  1: [red red]
  2: [blue red blue green]
@@ -55,7 +65,7 @@ Level 1 | moves: 1 | solved: false
  4: [green green]
  5: []
 
-$ ./colorsort move-bulk --moves "2-4,3-2,3-4,2-3,2-1,3-2,1-3"
+$ ./colorsort move-bulk --game-id 8f8f402b-3ba9-4bd9-a3b3-134b8603e808 --moves "2-4,3-2,3-4,2-3,2-1,3-2,1-3"
 Level 1 | moves: 8 | solved: true
  1: []
  2: [blue blue blue blue]
@@ -65,48 +75,52 @@ Level 1 | moves: 8 | solved: true
 *** YOU WIN ***
 ```
 
-Each command reads `./save.json`, applies one action, writes it back, and
-exits — `move-bulk` here just applies the remaining 7 moves of the level's
-known 8-move solution (see `colorsort solvable --level 1 --path`) in one call.
+Each command is a single GraphQL operation against the API (spawned locally
+by default, or pass `--api URL` for a remote server). The game with UUID
+`8f8f402b-...` persists across all commands.
 
 ## Commands
+
+All commands query a GraphQL API. By default, an ephemeral server is spawned
+on a random port; pass `--api URL` to connect to a running server instead.
 
 | Command | Description |
 |---|---|
 | `list` | List all levels with id, difficulty, tube count, capacity |
 | `solvable --level N [--path]` | Check whether level `N` is solvable (exhaustive search); `--path` prints a shortest solution |
-| `new --level N` | Start level `N`, refusing to start if it's provably unsolvable |
-| `reset --level N` | Same as `new`, restart from scratch |
-| `move --from A --to B` | Pour tube `A` onto tube `B` (1-indexed) |
-| `move-bulk --moves "1-4,2-3,3-1"` | Apply a comma-separated sequence of moves in order |
-| `undo` | Undo the last move |
-| `show` / `status` | Print the current board without changing anything |
-| `serve --port N` | Start an HTTP server with a GraphQL API and a web UI (default port 8080) |
+| `new --level N` | Start a new game on level `N`; returns game UUID |
+| `reset --game-id UUID` | Reset a game to its level's starting state |
+| `move --game-id UUID --from A --to B` | Pour tube `A` onto tube `B` (1-indexed) |
+| `move-bulk --game-id UUID --moves "1-4,2-3,3-1"` | Apply a comma-separated sequence of moves in order |
+| `undo --game-id UUID` | Undo the last move in a game |
+| `show` / `status --game-id UUID` | Print the current board |
+| `serve --port N` | Start an HTTP server with GraphQL API and web UI (default port 8080) |
 
-All commands accept `--save PATH` (default `./save.json`); `list`, `solvable`,
-`new`, and `reset` also accept `--levels PATH` (default: the embedded
-30-level set; pass a path to load a different `levels.json` instead).
+Global flags:
+
+| Flag | Description |
+|---|---|
+| `--api URL` | Connect to a remote GraphQL server (e.g. `--api http://localhost:8080/query`); if omitted, spawn an ephemeral local server |
 
 ### `--json`
 
 Every command accepts `--json` to print structured JSON on stdout instead of
-the human-readable board/text — useful for scripting. `new`/`move`/`move-bulk`/
-`undo`/`show` print the full `Save` object; `solvable` prints
-`{level, solvable, unknown, min_moves, path}`; `list` prints the level array.
-Errors are also emitted as JSON (`{"error": "..."}`) on stderr when `--json`
-is set. Exit codes are unchanged either way.
+the human-readable board/text — useful for scripting. `new` prints the full
+game object (including `id`); other game commands (`move`/`undo`/`show`) print
+the updated game state; `solvable` prints `{level, solvable, unknown, minMoves, path}`;
+`list` prints the level array. Errors are also emitted as JSON
+(`{"error": "..."}`) on stderr when `--json` is set. Exit codes are unchanged
+either way.
 
 ```console
-$ ./colorsort move --from 1 --to 4 --json
+$ ./colorsort new --level 1 --json | jq '.id'
+"8f8f402b-3ba9-4bd9-a3b3-134b8603e808"
+
+$ ./colorsort move --game-id 8f8f402b-... --from 1 --to 4 --json | jq '{id, moves, solved}'
 {
-  "level_id": 1,
-  "levels_path": "./levels.json",
-  "capacity": 4,
-  "tubes": [["red", "red"], ["blue", "red", "blue", "green"], ["red", "blue", "green", "blue"], ["green", "green"], []],
+  "id": "8f8f402b-3ba9-4bd9-a3b3-134b8603e808",
   "moves": 1,
-  "history": [{"from": 1, "to": 4}],
-  "solved": false,
-  "stuck": false
+  "solved": false
 }
 ```
 
@@ -216,11 +230,21 @@ the test suite instead of shipping silently.
 
 ## Architecture
 
-The root package (`github.com/wricardo/colorsortgame`) is a library with no
-CLI or I/O side effects beyond explicit `Load*`/`Write*` helpers — it can be
-imported and driven programmatically. `cmd/colorsort` is the CLI built on
-top of it (including `serve`, which starts the `graphqlapi` package's HTTP
-server); `cmd/gen` is a standalone level-authoring tool.
+The root package (`github.com/wricardo/colorsortgame`) is a pure library — no
+CLI or I/O side effects beyond explicit `Load*`/`Write*` helpers. It can be
+imported and driven programmatically (used by the GraphQL resolvers).
+
+`cmd/colorsort` is a non-interactive CLI that executes GraphQL queries/mutations
+against a GraphQL API (`graphqlapi` package). It spawns an ephemeral server by
+default (using the same handler as `serve`) or connects to a remote server
+(`--api URL`). All game state is in memory on the server; there are no local
+save files.
+
+`graphqlapi` exports `Handler()` and `Serve()` — the HTTP handler and server
+startup function, used by both the `colorsort serve` command and the CLI's
+ephemeral server spawning.
+
+`cmd/gen` is a standalone level-authoring tool.
 
 ## License
 
