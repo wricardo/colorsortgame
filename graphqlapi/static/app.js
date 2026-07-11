@@ -1,13 +1,27 @@
-import { gql, renderBoard, urlWithGameId, gameIdFromUrl } from "./logic.js";
+import {
+  gql,
+  renderBoard,
+  renderMoveLog,
+  urlWithGameId,
+  gameIdFromUrl,
+  wsUrlFor,
+  openGameSubscription,
+} from "./logic.js";
 
 let gameId = null;
 let selected = null;
 let currentGame = null;
+let closeSubscription = null;
+let levelsMap = {}; // levelId -> difficulty
 
 const statusEl = document.getElementById("status");
 const boardEl = document.getElementById("board");
 const levelSelect = document.getElementById("levelSelect");
 const gameIdInput = document.getElementById("gameIdInput");
+const moveLogEl = document.getElementById("moveLog");
+const levelDisplay = document.getElementById("levelDisplay");
+const difficultyDisplay = document.getElementById("difficultyDisplay");
+const moveCount = document.getElementById("moveCount");
 
 function setStatus(text, cls) {
   statusEl.textContent = text;
@@ -18,11 +32,31 @@ function setGameId(id) {
   gameId = id;
   gameIdInput.value = id || "";
   history.replaceState(null, "", urlWithGameId(location.href, id));
+  subscribeToGame(id);
+}
+
+function subscribeToGame(id) {
+  if (closeSubscription) {
+    closeSubscription();
+    closeSubscription = null;
+  }
+  if (!id) return;
+  closeSubscription = openGameSubscription(WebSocket, wsUrlFor(location.href), id, {
+    onGame: (game) => {
+      selected = null;
+      draw(game);
+    },
+    onError: (e) => setStatus(e.message, "err"),
+  });
 }
 
 function draw(game) {
   currentGame = game;
   renderBoard(document, boardEl, statusEl, game, selected, onTubeClick);
+  renderMoveLog(document, moveLogEl, game.history || []);
+  levelDisplay.textContent = game.levelId;
+  difficultyDisplay.textContent = (levelsMap[game.levelId] || "—").toUpperCase();
+  moveCount.textContent = game.moves;
 }
 
 async function onTubeClick(i) {
@@ -42,7 +76,7 @@ async function onTubeClick(i) {
   try {
     const data = await gql(
       fetch,
-      `mutation($g: ID!, $f: Int!, $t: Int!) { move(gameId: $g, from: $f, to: $t) { levelId capacity tubes moves solved stuck } }`,
+      `mutation($g: ID!, $f: Int!, $t: Int!) { move(gameId: $g, from: $f, to: $t) { levelId capacity tubes moves solved stuck history { from to } } }`,
       { g: gameId, f: from + 1, t: i + 1 }
     );
     draw(data.move);
@@ -54,7 +88,9 @@ async function onTubeClick(i) {
 async function loadLevels() {
   const data = await gql(fetch, `{ levels { id difficulty } }`, {});
   levelSelect.innerHTML = "";
+  levelsMap = {};
   data.levels.forEach((lvl) => {
+    levelsMap[lvl.id] = lvl.difficulty;
     const opt = document.createElement("option");
     opt.value = lvl.id;
     opt.textContent = `Level ${lvl.id} (${lvl.difficulty.toLowerCase()})`;
@@ -68,7 +104,7 @@ async function newGame() {
   try {
     const data = await gql(
       fetch,
-      `mutation($l: Int!) { newGame(levelId: $l) { id levelId capacity tubes moves solved stuck } }`,
+      `mutation($l: Int!) { newGame(levelId: $l) { id levelId capacity tubes moves solved stuck history { from to } } }`,
       { l: levelId }
     );
     setGameId(data.newGame.id);
@@ -84,7 +120,7 @@ async function resetGame() {
   try {
     const data = await gql(
       fetch,
-      `mutation($g: ID!) { resetGame(gameId: $g) { levelId capacity tubes moves solved stuck } }`,
+      `mutation($g: ID!) { resetGame(gameId: $g) { levelId capacity tubes moves solved stuck history { from to } } }`,
       { g: gameId }
     );
     draw(data.resetGame);
@@ -99,7 +135,7 @@ async function undo() {
   try {
     const data = await gql(
       fetch,
-      `mutation($g: ID!) { undo(gameId: $g) { levelId capacity tubes moves solved stuck } }`,
+      `mutation($g: ID!) { undo(gameId: $g) { levelId capacity tubes moves solved stuck history { from to } } }`,
       { g: gameId }
     );
     draw(data.undo);
@@ -115,7 +151,7 @@ async function joinGame(id) {
   try {
     const data = await gql(
       fetch,
-      `query($g: ID!) { game(id: $g) { id levelId capacity tubes moves solved stuck } }`,
+      `query($g: ID!) { game(id: $g) { id levelId capacity tubes moves solved stuck history { from to } } }`,
       { g: id }
     );
     if (!data.game) throw new Error("game not found");

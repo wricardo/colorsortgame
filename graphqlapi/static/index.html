@@ -5,41 +5,355 @@
 <title>colorsort</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #111; color: #eee; }
-  h1 { font-size: 1.3rem; }
-  select, button { font-size: 1rem; padding: 0.4rem 0.8rem; margin: 0.2rem; cursor: pointer; }
-  #board { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1.5rem 0; }
-  .tube { display: flex; flex-direction: column-reverse; border: 3px solid #666; border-radius: 0 0 10px 10px; width: 50px; min-height: 180px; padding: 4px; gap: 4px; background: #1a1a1a; }
-  .tube.selected { border-color: #fff; }
-  .segment { height: 40px; border-radius: 4px; }
-  .tube-label { text-align: center; font-size: 0.8rem; color: #888; margin-top: 0.3rem; }
-  .tube-wrap { display: flex; flex-direction: column; align-items: center; }
-  #status { margin: 1rem 0; font-weight: bold; min-height: 1.5rem; }
-  #status.win { color: #4caf50; }
-  #status.stuck { color: #f44336; }
-  #status.err { color: #f44336; }
-  .controls { margin-bottom: 1rem; }
+  :root {
+    --bg-primary: #0f1419;
+    --bg-surface: #1a1f2e;
+    --bg-hover: #25293d;
+    --text-primary: #e8eef5;
+    --text-secondary: #7a8fa3;
+    --accent: #00d9ff;
+    --accent-hover: #00b8d4;
+    --success: #4ade80;
+    --alert: #ef4444;
+    --border: #2d3647;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg-primary: #f8fafb;
+      --bg-surface: #ffffff;
+      --bg-hover: #f0f4f8;
+      --text-primary: #1a202c;
+      --text-secondary: #64748b;
+      --accent: #0088cc;
+      --accent-hover: #006ba3;
+      --border: #e2e8f0;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg-primary: #0f1419;
+    --bg-surface: #1a1f2e;
+    --bg-hover: #25293d;
+    --text-primary: #e8eef5;
+    --text-secondary: #7a8fa3;
+    --accent: #00d9ff;
+    --accent-hover: #00b8d4;
+  }
+
+  :root[data-theme="light"] {
+    --bg-primary: #f8fafb;
+    --bg-surface: #ffffff;
+    --bg-hover: #f0f4f8;
+    --text-primary: #1a202c;
+    --text-secondary: #64748b;
+    --accent: #0088cc;
+    --accent-hover: #006ba3;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 1rem;
+  }
+
+  .container { max-width: 900px; margin: 0 auto; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2rem;
+    padding-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin: 0;
+    letter-spacing: -0.02em;
+  }
+
+  .game-info {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.9rem;
+  }
+
+  .info-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .info-label {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .info-value {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  #status {
+    text-align: center;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    font-weight: 600;
+    min-height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #status.win {
+    color: var(--success);
+    border: 2px solid var(--success);
+  }
+
+  #status.stuck {
+    color: var(--alert);
+    border: 2px solid var(--alert);
+  }
+
+  #status.err {
+    color: var(--alert);
+  }
+
+  #board {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .tube-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .tube {
+    display: flex;
+    flex-direction: column-reverse;
+    width: 60px;
+    height: 200px;
+    background: var(--bg-surface);
+    border: 2px solid var(--border);
+    border-radius: 6px 6px 14px 14px;
+    padding: 6px;
+    gap: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .tube:hover {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(0, 217, 255, 0.15);
+  }
+
+  .tube.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 16px rgba(0, 217, 255, 0.3);
+  }
+
+  .segment {
+    height: 40px;
+    border-radius: 3px;
+    transition: transform 0.15s ease;
+  }
+
+  .tube:hover .segment { transform: scale(0.98); }
+
+  .tube-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    margin-top: 0.25rem;
+  }
+
+  .controls-group {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+  }
+
+  .controls-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1.25rem;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .controls-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+  }
+
+  select, input[type="text"], button {
+    font-family: inherit;
+    font-size: 0.95rem;
+    padding: 0.65rem 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  button {
+    font-weight: 500;
+    background: var(--bg-hover);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  button:hover {
+    background: var(--accent);
+    color: var(--bg-primary);
+  }
+
+  button:active {
+    opacity: 0.85;
+  }
+
+  select, input[type="text"] {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+
+  select:focus, input[type="text"]:focus, button:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(0, 217, 255, 0.1);
+  }
+
+  .help-text {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    text-align: center;
+    margin-bottom: 1.5rem;
+  }
+
+  .move-log-section {
+    padding: 1.25rem;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .move-log-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+
+  #moveLog {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 150px;
+    overflow-y: auto;
+    font-size: 0.85rem;
+  }
+
+  #moveLog li {
+    padding: 0.4rem 0;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+  }
+
+  #moveLog li:last-child {
+    border-bottom: none;
+  }
+
+  #moveLog li:hover {
+    color: var(--accent);
+  }
+
+  @media (max-width: 640px) {
+    .game-info { gap: 1rem; }
+    #board { gap: 1rem; }
+    .tube { width: 50px; height: 180px; }
+    header { flex-direction: column; gap: 1rem; text-align: center; }
+  }
 </style>
 </head>
 <body>
-<h1>colorsort</h1>
+<div class="container">
+  <header>
+    <h1>colorsort</h1>
+    <div class="game-info">
+      <div class="info-item">
+        <span class="info-label">Level</span>
+        <span class="info-value" id="levelDisplay">—</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Difficulty</span>
+        <span class="info-value" id="difficultyDisplay">—</span>
+      </div>
+      <div class="info-item">
+        <span class="info-label">Moves</span>
+        <span class="info-value" id="moveCount">0</span>
+      </div>
+    </div>
+  </header>
 
-<div class="controls">
-  <select id="levelSelect"></select>
-  <button id="newGameBtn">New game</button>
-  <button id="resetBtn">Reset</button>
-  <button id="undoBtn">Undo</button>
+  <div id="status"></div>
+
+  <div id="board"></div>
+
+  <p class="help-text">Click a tube to select it as source, click another to pour into it.</p>
+
+  <div class="controls-section">
+    <span class="controls-label">Game Controls</span>
+    <div class="controls-group">
+      <select id="levelSelect"></select>
+      <button id="newGameBtn">New Game</button>
+      <button id="resetBtn">Reset</button>
+      <button id="undoBtn">Undo</button>
+    </div>
+  </div>
+
+  <div class="controls-section">
+    <span class="controls-label">Share Game</span>
+    <div class="controls-group" style="flex-direction: column; gap: 0.5rem;">
+      <input id="gameIdInput" type="text" placeholder="game id" readonly>
+      <div style="display: flex; gap: 0.75rem;">
+        <button id="joinBtn" style="flex: 1;">Join Game</button>
+        <button id="copyIdBtn" style="flex: 1;">Copy ID</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="move-log-section">
+    <span class="move-log-label">Move Log</span>
+    <ol id="moveLog"></ol>
+  </div>
 </div>
-
-<div class="controls">
-  <input id="gameIdInput" type="text" placeholder="game id" size="38">
-  <button id="joinBtn">Join game</button>
-  <button id="copyIdBtn">Copy game id</button>
-</div>
-
-<div id="status"></div>
-<div id="board"></div>
-<p style="color:#888; font-size:0.85rem;">Click a tube to select it as source, click another to pour into it.</p>
 
 <script type="module" src="app.js"></script>
 </body>
