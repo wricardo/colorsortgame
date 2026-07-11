@@ -356,3 +356,73 @@ func TestMoveBulk(t *testing.T) {
 		t.Fatalf("expected moves=2, got %v", gameIface["moves"])
 	}
 }
+
+func TestSolveLevel1EndToEnd(t *testing.T) {
+	baseURL, cleanup := startTestServer(t)
+	defer cleanup()
+
+	// Create game on level 1.
+	newQuery := `mutation newGame($levelId: Int!) {
+		newGame(levelId: $levelId) { id solved }
+	}`
+	newResult := queryGraphQL(t, baseURL, newQuery, map[string]interface{}{"levelId": 1})
+	gameID := newResult["data"].(map[string]interface{})["newGame"].(map[string]interface{})["id"].(string)
+
+	// Get solution path.
+	solveQuery := `query solvable($levelId: Int!, $includePath: Boolean!) {
+		solvable(levelId: $levelId, includePath: $includePath) {
+			solvable minMoves path
+		}
+	}`
+	solveResult := queryGraphQL(t, baseURL, solveQuery, map[string]interface{}{
+		"levelId": 1, "includePath": true,
+	})
+
+	solveData := solveResult["data"].(map[string]interface{})
+	solveIface := solveData["solvable"].(map[string]interface{})
+
+	if !solveIface["solvable"].(bool) {
+		t.Fatal("level 1 should be solvable")
+	}
+
+	pathIface := solveIface["path"].([]interface{})
+	if len(pathIface) == 0 {
+		t.Fatal("solution path should not be empty")
+	}
+
+	// Convert path to moves string (e.g., ["1-4", "2-4"] -> "1-4,2-4")
+	moves := ""
+	for i, m := range pathIface {
+		if i > 0 {
+			moves += ","
+		}
+		moves += m.(string)
+	}
+
+	// Execute solution.
+	bulkQuery := `mutation moveBulk($id: ID!, $moves: String!) {
+		moveBulk(gameId: $id, moves: $moves) {
+			moves solved stuck
+		}
+	}`
+	bulkResult := queryGraphQL(t, baseURL, bulkQuery, map[string]interface{}{
+		"id": gameID, "moves": moves,
+	})
+
+	bulkData := bulkResult["data"].(map[string]interface{})
+	gameIface := bulkData["moveBulk"].(map[string]interface{})
+
+	if !gameIface["solved"].(bool) {
+		t.Fatal("expected solved=true after executing solution")
+	}
+
+	if gameIface["stuck"].(bool) {
+		t.Fatal("expected stuck=false after executing solution")
+	}
+
+	expectedMoves := int(solveIface["minMoves"].(float64))
+	actualMoves := int(gameIface["moves"].(float64))
+	if actualMoves != expectedMoves {
+		t.Fatalf("expected moves=%d, got %d", expectedMoves, actualMoves)
+	}
+}
