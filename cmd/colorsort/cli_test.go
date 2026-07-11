@@ -10,35 +10,7 @@ import (
 	"time"
 )
 
-func getColorsortBinary(t *testing.T) string {
-	// Get the directory of the test file
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-
-	// Try to find the colorsort binary
-	paths := []string{
-		wd + "/colorsort",
-		"colorsort",
-		"./colorsort",
-	}
-
-	for _, p := range paths {
-		if info, err := os.Stat(p); err == nil && !info.IsDir() {
-			return p
-		}
-	}
-
-	// If not found, try building it in the current directory
-	cmd := exec.Command("go", "build", "-o", wd+"/colorsort", "./...")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("Failed to build colorsort: %v", err)
-	}
-	return wd + "/colorsort"
-}
-
-func startTestServer(t *testing.T, binary string) (string, func()) {
+func startTestServer(t *testing.T) (string, func()) {
 	// Get random port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -47,8 +19,8 @@ func startTestServer(t *testing.T, binary string) (string, func()) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
-	// Start server
-	cmd := exec.Command(binary, "serve", "--port", fmt.Sprintf("%d", port))
+	// Start server via go run
+	cmd := exec.Command("go", "run", "./", "serve", "--port", fmt.Sprintf("%d", port))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -65,8 +37,9 @@ func startTestServer(t *testing.T, binary string) (string, func()) {
 	}
 }
 
-func runCLI(t *testing.T, binary string, args ...string) (string, error) {
-	cmd := exec.Command(binary, args...)
+func runCLI(t *testing.T, args ...string) (string, error) {
+	allArgs := append([]string{"run", "./"}, args...)
+	cmd := exec.Command("go", allArgs...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -76,8 +49,7 @@ func TestCLIList(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	out, err := runCLI(t, binary, "list")
+	out, err := runCLI(t, "list")
 	if err != nil {
 		t.Fatalf("colorsort list: %v", err)
 	}
@@ -92,8 +64,7 @@ func TestCLIListJSON(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	out, err := runCLI(t, binary, "list", "--json")
+	out, err := runCLI(t, "list", "--json")
 	if err != nil {
 		t.Fatalf("colorsort list --json: %v", err)
 	}
@@ -113,8 +84,7 @@ func TestCLISolvable(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	out, err := runCLI(t, binary, "solvable", "--level", "1")
+	out, err := runCLI(t, "solvable", "--level", "1")
 	if err != nil {
 		t.Fatalf("colorsort solvable: %v", err)
 	}
@@ -129,8 +99,7 @@ func TestCLISolvableWithPath(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	out, err := runCLI(t, binary, "solvable", "--level", "1", "--path")
+	out, err := runCLI(t, "solvable", "--level", "1", "--path")
 	if err != nil {
 		t.Fatalf("colorsort solvable --path: %v", err)
 	}
@@ -146,13 +115,12 @@ func TestCLINewAndMove(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
 	// Test with remote API
-	apiURL, cleanup := startTestServer(t, binary)
+	apiURL, cleanup := startTestServer(t)
 	defer cleanup()
 
 	// Create game
-	out, err := runCLI(t, binary, "--api", apiURL, "new", "--level", "1", "--json")
+	out, err := runCLI(t, "--api", apiURL, "new", "--level", "1", "--json")
 	if err != nil {
 		t.Fatalf("colorsort new: %v\nout: %s", err, out)
 	}
@@ -168,7 +136,7 @@ func TestCLINewAndMove(t *testing.T) {
 	}
 
 	// Make a move
-	out, err = runCLI(t, binary, "--api", apiURL, "move", "--game-id", gameID, "--from", "1", "--to", "4")
+	out, err = runCLI(t, "--api", apiURL, "move", "--game-id", gameID, "--from", "1", "--to", "4")
 	if err != nil {
 		t.Fatalf("colorsort move: %v\nout: %s", err, out)
 	}
@@ -183,12 +151,11 @@ func TestCLIShowStatus(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	apiURL, cleanup := startTestServer(t, binary)
+	apiURL, cleanup := startTestServer(t)
 	defer cleanup()
 
 	// Create game
-	out, err := runCLI(t, binary, "--api", apiURL, "new", "--level", "1", "--json")
+	out, err := runCLI(t, "--api", apiURL, "new", "--level", "1", "--json")
 	if err != nil {
 		t.Fatalf("colorsort new: %v", err)
 	}
@@ -198,7 +165,7 @@ func TestCLIShowStatus(t *testing.T) {
 	gameID := game["id"].(string)
 
 	// Show status
-	out, err = runCLI(t, binary, "--api", apiURL, "show", "--game-id", gameID)
+	out, err = runCLI(t, "--api", apiURL, "show", "--game-id", gameID)
 	if err != nil {
 		t.Fatalf("colorsort show: %v", err)
 	}
@@ -213,12 +180,11 @@ func TestCLIUndo(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	apiURL, cleanup := startTestServer(t, binary)
+	apiURL, cleanup := startTestServer(t)
 	defer cleanup()
 
 	// Create game and make a move
-	out, err := runCLI(t, binary, "--api", apiURL, "new", "--level", "1", "--json")
+	out, err := runCLI(t, "--api", apiURL, "new", "--level", "1", "--json")
 	if err != nil {
 		t.Fatalf("colorsort new: %v", err)
 	}
@@ -228,10 +194,10 @@ func TestCLIUndo(t *testing.T) {
 	gameID := game["id"].(string)
 
 	// Move
-	runCLI(t, binary, "--api", apiURL, "move", "--game-id", gameID, "--from", "1", "--to", "4")
+	runCLI(t, "--api", apiURL, "move", "--game-id", gameID, "--from", "1", "--to", "4")
 
 	// Undo
-	out, err = runCLI(t, binary, "--api", apiURL, "undo", "--game-id", gameID)
+	out, err = runCLI(t, "--api", apiURL, "undo", "--game-id", gameID)
 	if err != nil {
 		t.Fatalf("colorsort undo: %v", err)
 	}
@@ -246,12 +212,11 @@ func TestCLIMoveBulk(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	apiURL, cleanup := startTestServer(t, binary)
+	apiURL, cleanup := startTestServer(t)
 	defer cleanup()
 
 	// Create game
-	out, err := runCLI(t, binary, "--api", apiURL, "new", "--level", "1", "--json")
+	out, err := runCLI(t, "--api", apiURL, "new", "--level", "1", "--json")
 	if err != nil {
 		t.Fatalf("colorsort new: %v", err)
 	}
@@ -261,7 +226,7 @@ func TestCLIMoveBulk(t *testing.T) {
 	gameID := game["id"].(string)
 
 	// Make multiple moves
-	out, err = runCLI(t, binary, "--api", apiURL, "move-bulk", "--game-id", gameID, "--moves", "1-4,2-4")
+	out, err = runCLI(t, "--api", apiURL, "move-bulk", "--game-id", gameID, "--moves", "1-4,2-4")
 	if err != nil {
 		t.Fatalf("colorsort move-bulk: %v", err)
 	}
@@ -276,12 +241,11 @@ func TestCLIReset(t *testing.T) {
 		t.Skip("skipping CLI test in short mode")
 	}
 
-	binary := getColorsortBinary(t)
-	apiURL, cleanup := startTestServer(t, binary)
+	apiURL, cleanup := startTestServer(t)
 	defer cleanup()
 
 	// Create game and make a move
-	out, err := runCLI(t, binary, "--api", apiURL, "new", "--level", "1", "--json")
+	out, err := runCLI(t, "--api", apiURL, "new", "--level", "1", "--json")
 	if err != nil {
 		t.Fatalf("colorsort new: %v", err)
 	}
@@ -291,10 +255,10 @@ func TestCLIReset(t *testing.T) {
 	gameID := game["id"].(string)
 
 	// Move
-	runCLI(t, binary, "--api", apiURL, "move", "--game-id", gameID, "--from", "1", "--to", "4")
+	runCLI(t, "--api", apiURL, "move", "--game-id", gameID, "--from", "1", "--to", "4")
 
 	// Reset
-	out, err = runCLI(t, binary, "--api", apiURL, "reset", "--game-id", gameID)
+	out, err = runCLI(t, "--api", apiURL, "reset", "--game-id", gameID)
 	if err != nil {
 		t.Fatalf("colorsort reset: %v", err)
 	}
