@@ -1,104 +1,58 @@
-const COLORS = {
-  red: "#e53935", blue: "#1e88e5", green: "#43a047", yellow: "#fdd835",
-  purple: "#8e24aa", orange: "#fb8c00", pink: "#ec407a", cyan: "#00acc1",
-  gray: "#757575", brown: "#6d4c41", lime: "#c0ca33", teal: "#00897b",
-};
+import { gql, renderBoard, urlWithGameId, gameIdFromUrl } from "./logic.js";
 
 let gameId = null;
 let selected = null;
+let currentGame = null;
 
 const statusEl = document.getElementById("status");
 const boardEl = document.getElementById("board");
 const levelSelect = document.getElementById("levelSelect");
-
-async function gql(query, variables) {
-  const res = await fetch("/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, variables }),
-  });
-  const body = await res.json();
-  if (body.errors && body.errors.length) {
-    throw new Error(body.errors.map((e) => e.message).join("; "));
-  }
-  return body.data;
-}
+const gameIdInput = document.getElementById("gameIdInput");
 
 function setStatus(text, cls) {
   statusEl.textContent = text;
   statusEl.className = cls || "";
 }
 
-function renderBoard(game) {
-  boardEl.innerHTML = "";
-  game.tubes.forEach((tube, i) => {
-    const wrap = document.createElement("div");
-    wrap.className = "tube-wrap";
+function setGameId(id) {
+  gameId = id;
+  gameIdInput.value = id || "";
+  history.replaceState(null, "", urlWithGameId(location.href, id));
+}
 
-    const tubeEl = document.createElement("div");
-    tubeEl.className = "tube" + (selected === i ? " selected" : "");
-    tubeEl.dataset.index = i;
-    tubeEl.addEventListener("click", () => onTubeClick(i));
-
-    tube.forEach((color) => {
-      const seg = document.createElement("div");
-      seg.className = "segment";
-      seg.style.background = COLORS[color] || color;
-      tubeEl.appendChild(seg);
-    });
-
-    const label = document.createElement("div");
-    label.className = "tube-label";
-    label.textContent = i + 1;
-
-    wrap.appendChild(tubeEl);
-    wrap.appendChild(label);
-    boardEl.appendChild(wrap);
-  });
-
-  if (game.solved) {
-    setStatus("YOU WIN", "win");
-  } else if (game.stuck) {
-    setStatus("STUCK - no legal moves left", "stuck");
-  } else {
-    setStatus(`moves: ${game.moves}`);
-  }
+function draw(game) {
+  currentGame = game;
+  renderBoard(document, boardEl, statusEl, game, selected, onTubeClick);
 }
 
 async function onTubeClick(i) {
-  if (!gameId) return;
+  if (!gameId || !currentGame) return;
   if (selected === null) {
     selected = i;
-    highlightSelected();
+    draw(currentGame);
     return;
   }
   if (selected === i) {
     selected = null;
-    highlightSelected();
+    draw(currentGame);
     return;
   }
   const from = selected;
   selected = null;
   try {
     const data = await gql(
+      fetch,
       `mutation($g: ID!, $f: Int!, $t: Int!) { move(gameId: $g, from: $f, to: $t) { levelId capacity tubes moves solved stuck } }`,
       { g: gameId, f: from + 1, t: i + 1 }
     );
-    renderBoard(data.move);
+    draw(data.move);
   } catch (e) {
     setStatus(e.message, "err");
-    highlightSelected();
   }
 }
 
-function highlightSelected() {
-  document.querySelectorAll(".tube").forEach((el) => {
-    el.classList.toggle("selected", Number(el.dataset.index) === selected);
-  });
-}
-
 async function loadLevels() {
-  const data = await gql(`{ levels { id difficulty } }`, {});
+  const data = await gql(fetch, `{ levels { id difficulty } }`, {});
   levelSelect.innerHTML = "";
   data.levels.forEach((lvl) => {
     const opt = document.createElement("option");
@@ -113,11 +67,12 @@ async function newGame() {
   const levelId = Number(levelSelect.value);
   try {
     const data = await gql(
+      fetch,
       `mutation($l: Int!) { newGame(levelId: $l) { id levelId capacity tubes moves solved stuck } }`,
       { l: levelId }
     );
-    gameId = data.newGame.id;
-    renderBoard(data.newGame);
+    setGameId(data.newGame.id);
+    draw(data.newGame);
   } catch (e) {
     setStatus(e.message, "err");
   }
@@ -128,10 +83,11 @@ async function resetGame() {
   selected = null;
   try {
     const data = await gql(
+      fetch,
       `mutation($g: ID!) { resetGame(gameId: $g) { levelId capacity tubes moves solved stuck } }`,
       { g: gameId }
     );
-    renderBoard(data.resetGame);
+    draw(data.resetGame);
   } catch (e) {
     setStatus(e.message, "err");
   }
@@ -142,17 +98,50 @@ async function undo() {
   selected = null;
   try {
     const data = await gql(
+      fetch,
       `mutation($g: ID!) { undo(gameId: $g) { levelId capacity tubes moves solved stuck } }`,
       { g: gameId }
     );
-    renderBoard(data.undo);
+    draw(data.undo);
   } catch (e) {
     setStatus(e.message, "err");
+  }
+}
+
+async function joinGame(id) {
+  id = (id || gameIdInput.value).trim();
+  if (!id) return;
+  selected = null;
+  try {
+    const data = await gql(
+      fetch,
+      `query($g: ID!) { game(id: $g) { id levelId capacity tubes moves solved stuck } }`,
+      { g: id }
+    );
+    if (!data.game) throw new Error("game not found");
+    setGameId(data.game.id);
+    levelSelect.value = String(data.game.levelId);
+    draw(data.game);
+  } catch (e) {
+    setStatus(e.message, "err");
+  }
+}
+
+async function copyGameId() {
+  if (!gameId) return;
+  try {
+    await navigator.clipboard.writeText(gameId);
+    setStatus(`game id copied: ${gameId}`);
+  } catch (e) {
+    setStatus(gameId);
   }
 }
 
 document.getElementById("newGameBtn").addEventListener("click", newGame);
 document.getElementById("resetBtn").addEventListener("click", resetGame);
 document.getElementById("undoBtn").addEventListener("click", undo);
+document.getElementById("joinBtn").addEventListener("click", () => joinGame());
+document.getElementById("copyIdBtn").addEventListener("click", copyGameId);
 
-loadLevels().then(newGame);
+const urlGameId = gameIdFromUrl(location.href);
+loadLevels().then(() => (urlGameId ? joinGame(urlGameId) : newGame()));

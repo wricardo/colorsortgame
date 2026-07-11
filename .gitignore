@@ -2,3 +2,4 @@
 /gen
 /save.json
 *.db
+node_modules/
