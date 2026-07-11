@@ -81,6 +81,29 @@ known 8-move solution (see `colorsort solvable --level 1 --path`) in one call.
 All commands accept `--save PATH` (default `./save.json`); `list`, `solvable`,
 `new`, and `reset` also accept `--levels PATH` (default `./levels.json`).
 
+### `--json`
+
+Every command accepts `--json` to print structured JSON on stdout instead of
+the human-readable board/text — useful for scripting. `new`/`move`/`move-bulk`/
+`undo`/`show` print the full `Save` object; `solvable` prints
+`{level, solvable, unknown, min_moves, path}`; `list` prints the level array.
+Errors are also emitted as JSON (`{"error": "..."}`) on stderr when `--json`
+is set. Exit codes are unchanged either way.
+
+```console
+$ ./colorsort move --from 1 --to 4 --json
+{
+  "level_id": 1,
+  "levels_path": "./levels.json",
+  "capacity": 4,
+  "tubes": [["red", "red"], ["blue", "red", "blue", "green"], ["red", "blue", "green", "blue"], ["green", "green"], []],
+  "moves": 1,
+  "history": [{"from": 1, "to": 4}],
+  "solved": false,
+  "stuck": false
+}
+```
+
 ### Exit codes
 
 - `0` — success (or a solved win)
