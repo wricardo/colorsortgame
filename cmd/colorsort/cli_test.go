@@ -94,21 +94,6 @@ func TestCLISolvable(t *testing.T) {
 	}
 }
 
-func TestCLISolvableWithPath(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping CLI test in short mode")
-	}
-
-	out, err := runCLI(t, "solvable", "--level", "1", "--path")
-	if err != nil {
-		t.Fatalf("colorsort solvable --path: %v", err)
-	}
-
-	// Should contain comma-separated moves
-	if len(out) == 0 {
-		t.Fatal("expected output from solvable command")
-	}
-}
 
 func TestCLINewAndMove(t *testing.T) {
 	if testing.Short() {

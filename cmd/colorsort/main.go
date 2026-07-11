@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/wricardo/colorsortgame"
 	"github.com/wricardo/colorsortgame/graphqlapi"
@@ -42,11 +41,9 @@ func output(asJSON bool, v any, text func()) {
 }
 
 type solvableResult struct {
-	Level    int      `json:"level"`
-	Solvable bool     `json:"solvable"`
-	Unknown  bool     `json:"unknown"`
-	MinMoves int      `json:"min_moves,omitempty"`
-	Path     []string `json:"path,omitempty"`
+	Level    int  `json:"level"`
+	Solvable bool `json:"solvable"`
+	Unknown  bool `json:"unknown"`
 }
 
 const usage = `colorsort - non-interactive water-sort puzzle CLI
@@ -67,10 +64,10 @@ Commands:
         List every level: id, difficulty, tube count, capacity.
         Flags: --json
 
-  solvable --level N [--path]
+  solvable --level N
         Query the API: is level N solvable? Exit code 0 if solvable, 1 if
         provably not, 2 if the search-state cap was hit.
-        Flags: --level N (required), --path (also print move sequence), --json
+        Flags: --level N (required), --json
 
   new --level N
         Create a new game on level N. API checks solvability first and refuses
@@ -459,7 +456,6 @@ func main() {
 	case "solvable":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 		levelID := fs.Int("level", 0, "level id to check")
-		showPath := fs.Bool("path", false, "print the shortest solving move sequence")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
 		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
@@ -469,12 +465,12 @@ func main() {
 		}
 
 		ctx := context.Background()
-		query := `query solvable($levelId: Int!, $includePath: Boolean!) {
-			solvable(levelId: $levelId, includePath: $includePath) {
-				solvable unknown minMoves path
+		query := `query solvable($levelId: Int!) {
+			solvable(levelId: $levelId) {
+				solvable unknown
 			}
 		}`
-		vars := map[string]interface{}{"levelId": *levelID, "includePath": *showPath}
+		vars := map[string]interface{}{"levelId": *levelID}
 		resp, err := cli.Execute(ctx, query, vars)
 		if err != nil {
 			fail(err)
@@ -499,10 +495,6 @@ func main() {
 			Level:    *levelID,
 			Solvable: solve.Solvable,
 			Unknown:  solve.Unknown,
-			MinMoves: solve.MinMoves,
-		}
-		if solve.Solvable && *showPath {
-			result.Path = solve.Path
 		}
 
 		output(*asJSON, result, func() {
@@ -510,10 +502,7 @@ func main() {
 			case solve.Unknown:
 				fmt.Printf("level %d: unknown\n", *levelID)
 			case solve.Solvable:
-				fmt.Printf("level %d: solvable in %d moves\n", *levelID, solve.MinMoves)
-				if *showPath {
-					fmt.Println(strings.Join(result.Path, ","))
-				}
+				fmt.Printf("level %d: solvable\n", *levelID)
 			default:
 				fmt.Printf("level %d: not solvable\n", *levelID)
 			}

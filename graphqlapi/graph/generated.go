@@ -31,6 +31,7 @@ type Config = graphql.Config[ResolverRoot, DirectiveRoot, ComplexityRoot]
 type ResolverRoot interface {
 	Mutation() MutationResolver
 	Query() QueryResolver
+	Subscription() SubscriptionResolver
 }
 
 type DirectiveRoot struct {
@@ -73,15 +74,17 @@ type ComplexityRoot struct {
 		Game     func(childComplexity int, id string) int
 		Level    func(childComplexity int, id int32) int
 		Levels   func(childComplexity int, difficulty *model.Difficulty) int
-		Solvable func(childComplexity int, levelID int32, includePath *bool) int
+		Solvable func(childComplexity int, levelID int32) int
 	}
 
 	SolveResult struct {
 		Level    func(childComplexity int) int
-		MinMoves func(childComplexity int) int
-		Path     func(childComplexity int) int
 		Solvable func(childComplexity int) int
 		Unknown  func(childComplexity int) int
+	}
+
+	Subscription struct {
+		GameUpdated func(childComplexity int, gameID string) int
 	}
 }
 
@@ -99,8 +102,11 @@ type MutationResolver interface {
 type QueryResolver interface {
 	Levels(ctx context.Context, difficulty *model.Difficulty) ([]*model.Level, error)
 	Level(ctx context.Context, id int32) (*model.Level, error)
-	Solvable(ctx context.Context, levelID int32, includePath *bool) (*model.SolveResult, error)
+	Solvable(ctx context.Context, levelID int32) (*model.SolveResult, error)
 	Game(ctx context.Context, id string) (*model.Game, error)
+}
+type SubscriptionResolver interface {
+	GameUpdated(ctx context.Context, gameID string) (<-chan *model.Game, error)
 }
 
 // endregion ************************** generated!.gotpl **************************
@@ -314,7 +320,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.Solvable(childComplexity, args["levelId"].(int32), args["includePath"].(*bool)), true
+		return e.ComplexityRoot.Query.Solvable(childComplexity, args["levelId"].(int32)), true
 
 	case "SolveResult.level":
 		if e.ComplexityRoot.SolveResult.Level == nil {
@@ -322,18 +328,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SolveResult.Level(childComplexity), true
-	case "SolveResult.minMoves":
-		if e.ComplexityRoot.SolveResult.MinMoves == nil {
-			break
-		}
-
-		return e.ComplexityRoot.SolveResult.MinMoves(childComplexity), true
-	case "SolveResult.path":
-		if e.ComplexityRoot.SolveResult.Path == nil {
-			break
-		}
-
-		return e.ComplexityRoot.SolveResult.Path(childComplexity), true
 	case "SolveResult.solvable":
 		if e.ComplexityRoot.SolveResult.Solvable == nil {
 			break
@@ -346,6 +340,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.SolveResult.Unknown(childComplexity), true
+
+	case "Subscription.gameUpdated":
+		if e.ComplexityRoot.Subscription.GameUpdated == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_gameUpdated_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.GameUpdated(childComplexity, args["gameId"].(string)), true
 
 	}
 	return 0, false
@@ -397,6 +403,23 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 			ctx = graphql.WithUnmarshalerMap(ctx, inputUnmarshalMap)
 			data := ec._Mutation(ctx, opCtx.Operation.SelectionSet)
 			var buf bytes.Buffer
+			data.MarshalGQL(&buf)
+
+			return &graphql.Response{
+				Data: buf.Bytes(),
+			}
+		}
+	case ast.Subscription:
+		next := ec._Subscription(ctx, opCtx.Operation.SelectionSet)
+
+		var buf bytes.Buffer
+		return func(ctx context.Context) *graphql.Response {
+			buf.Reset()
+			data := next(ctx)
+
+			if data == nil {
+				return nil
+			}
 			data.MarshalGQL(&buf)
 
 			return &graphql.Response{
@@ -504,10 +527,6 @@ func (ec *executionContext) childFields_SolveResult(ctx context.Context, field g
 		return ec.fieldContext_SolveResult_solvable(ctx, field)
 	case "unknown":
 		return ec.fieldContext_SolveResult_unknown(ctx, field)
-	case "minMoves":
-		return ec.fieldContext_SolveResult_minMoves(ctx, field)
-	case "path":
-		return ec.fieldContext_SolveResult_path(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type SolveResult", field.Name)
 }
@@ -789,14 +808,20 @@ func (ec *executionContext) field_Query_solvable_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["levelId"] = arg0
-	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "includePath",
-		func(ctx context.Context, v any) (*bool, error) {
-			return ec.unmarshalOBoolean2ᚖbool(ctx, v)
+	return args, nil
+}
+
+func (ec *executionContext) field_Subscription_gameUpdated_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "gameId",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNID2string(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["includePath"] = arg1
+	args["gameId"] = arg0
 	return args, nil
 }
 
@@ -1532,7 +1557,7 @@ func (ec *executionContext) _Query_solvable(ctx context.Context, field graphql.C
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Solvable(ctx, fc.Args["levelId"].(int32), fc.Args["includePath"].(*bool))
+			return ec.Resolvers.Query().Solvable(ctx, fc.Args["levelId"].(int32))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *model.SolveResult) graphql.Marshaler {
@@ -1755,50 +1780,48 @@ func (ec *executionContext) fieldContext_SolveResult_unknown(_ context.Context, 
 	return graphql.NewScalarFieldContext("SolveResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
-func (ec *executionContext) _SolveResult_minMoves(ctx context.Context, field graphql.CollectedField, obj *model.SolveResult) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
+func (ec *executionContext) _Subscription_gameUpdated(ctx context.Context, field graphql.CollectedField) (ret func(ctx context.Context) graphql.Marshaler) {
+	return graphql.ResolveFieldStream(
 		ctx,
 		ec.OperationContext,
 		field,
 		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_SolveResult_minMoves(ctx, field)
+			return ec.fieldContext_Subscription_gameUpdated(ctx, field)
 		},
 		func(ctx context.Context) (any, error) {
-			return obj.MinMoves, nil
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Subscription().GameUpdated(ctx, fc.Args["gameId"].(string))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *int32) graphql.Marshaler {
-			return ec.marshalOInt2ᚖint32(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.Game) graphql.Marshaler {
+			return ec.marshalNGame2ᚖgithubᚗcomᚋwricardoᚋcolorsortgameᚋgraphqlapiᚋgraphᚋmodelᚐGame(ctx, selections, v)
 		},
 		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_SolveResult_minMoves(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("SolveResult", field, false, false, errors.New("field of type Int does not have child fields"))
-}
-
-func (ec *executionContext) _SolveResult_path(ctx context.Context, field graphql.CollectedField, obj *model.SolveResult) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_SolveResult_path(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.Path, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
-			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
-		},
 		true,
-		false,
 	)
 }
-func (ec *executionContext) fieldContext_SolveResult_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("SolveResult", field, false, false, errors.New("field of type String does not have child fields"))
+func (ec *executionContext) fieldContext_Subscription_gameUpdated(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Subscription",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_Game(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Subscription_gameUpdated_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) ___Directive_name(ctx context.Context, field graphql.CollectedField, obj *introspection.Directive) (ret graphql.Marshaler) {
@@ -3288,16 +3311,6 @@ func (ec *executionContext) _SolveResult(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "minMoves":
-			out.Values[i] = ec._SolveResult_minMoves(ctx, field, obj)
-			if out.Values[i] == graphql.RequiredNull {
-				out.Invalids++
-			}
-		case "path":
-			out.Values[i] = ec._SolveResult_path(ctx, field, obj)
-			if out.Values[i] == graphql.RequiredNull {
-				out.Invalids++
-			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -3317,6 +3330,26 @@ func (ec *executionContext) _SolveResult(ctx context.Context, sel ast.SelectionS
 	})
 
 	return out
+}
+
+var subscriptionImplementors = []string{"Subscription"}
+
+func (ec *executionContext) _Subscription(ctx context.Context, sel ast.SelectionSet) func(ctx context.Context) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, subscriptionImplementors)
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Subscription",
+	})
+	if len(fields) != 1 {
+		graphql.AddErrorf(ctx, "must subscribe to exactly one stream")
+		return nil
+	}
+
+	switch fields[0].Name {
+	case "gameUpdated":
+		return ec._Subscription_gameUpdated(ctx, fields[0])
+	default:
+		panic("unknown field " + strconv.Quote(fields[0].Name))
+	}
 }
 
 var __DirectiveImplementors = []string{"__Directive"}
@@ -4116,64 +4149,11 @@ func (ec *executionContext) marshalOGame2ᚖgithubᚗcomᚋwricardoᚋcolorsortg
 	return ec._Game(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOInt2ᚖint32(ctx context.Context, v any) (*int32, error) {
-	if v == nil {
-		return nil, nil
-	}
-	res, err := graphql.UnmarshalInt32(v)
-	return &res, graphql.ErrorOnPath(ctx, err)
-}
-
-func (ec *executionContext) marshalOInt2ᚖint32(ctx context.Context, sel ast.SelectionSet, v *int32) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	_ = sel
-	_ = ctx
-	res := graphql.MarshalInt32(*v)
-	return res
-}
-
 func (ec *executionContext) marshalOLevel2ᚖgithubᚗcomᚋwricardoᚋcolorsortgameᚋgraphqlapiᚋgraphᚋmodelᚐLevel(ctx context.Context, sel ast.SelectionSet, v *model.Level) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Level(ctx, sel, v)
-}
-
-func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
-	if v == nil {
-		return nil, nil
-	}
-	vSlice := graphql.CoerceList(v)
-	var err error
-	res := make([]string, len(vSlice))
-	for i := range vSlice {
-		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNString2string(ctx, vSlice[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	return res, nil
-}
-
-func (ec *executionContext) marshalOString2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	ret := make(graphql.Array, len(v))
-	for i := range v {
-		ret[i] = ec.marshalNString2string(ctx, sel, v[i])
-	}
-
-	for _, e := range ret {
-		if e == graphql.Null {
-			return graphql.Null
-		}
-	}
-
-	return ret
 }
 
 func (ec *executionContext) unmarshalOString2ᚖstring(ctx context.Context, v any) (*string, error) {

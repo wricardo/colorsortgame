@@ -40,11 +40,12 @@ type Query struct {
 }
 
 type SolveResult struct {
-	Level    int32    `json:"level"`
-	Solvable bool     `json:"solvable"`
-	Unknown  bool     `json:"unknown"`
-	MinMoves *int32   `json:"minMoves,omitempty"`
-	Path     []string `json:"path,omitempty"`
+	Level    int32 `json:"level"`
+	Solvable bool  `json:"solvable"`
+	Unknown  bool  `json:"unknown"`
+}
+
+type Subscription struct {
 }
 
 type Difficulty string

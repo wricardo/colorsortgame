@@ -10,7 +10,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/wricardo/colorsortgame"
+	colorsort "github.com/wricardo/colorsortgame"
 	"github.com/wricardo/colorsortgame/graphqlapi/graph/model"
 )
 
@@ -47,6 +47,7 @@ func (r *mutationResolver) Move(ctx context.Context, gameID string, from int32, 
 	if err := s.ApplyMove(int(from), int(to)); err != nil {
 		return nil, err
 	}
+	r.publish(gameID, s)
 	return r.toModelGame(gameID, s), nil
 }
 
@@ -74,6 +75,7 @@ func (r *mutationResolver) MoveBulk(ctx context.Context, gameID string, moves st
 		}
 	}
 
+	r.publish(gameID, s)
 	return r.toModelGame(gameID, s), nil
 }
 
@@ -89,6 +91,7 @@ func (r *mutationResolver) Undo(ctx context.Context, gameID string) (*model.Game
 	if err := s.Undo(); err != nil {
 		return nil, err
 	}
+	r.publish(gameID, s)
 	return r.toModelGame(gameID, s), nil
 }
 
@@ -108,6 +111,7 @@ func (r *mutationResolver) ResetGame(ctx context.Context, gameID string) (*model
 
 	fresh := colorsort.NewSave(level, "")
 	r.games[gameID] = fresh
+	r.publish(gameID, fresh)
 	return r.toModelGame(gameID, fresh), nil
 }
 
@@ -134,30 +138,18 @@ func (r *queryResolver) Level(ctx context.Context, id int32) (*model.Level, erro
 }
 
 // Solvable is the resolver for the solvable field.
-func (r *queryResolver) Solvable(ctx context.Context, levelID int32, includePath *bool) (*model.SolveResult, error) {
+func (r *queryResolver) Solvable(ctx context.Context, levelID int32) (*model.SolveResult, error) {
 	level, err := colorsort.FindLevel(r.levels, int(levelID))
 	if err != nil {
 		return nil, err
 	}
 
 	res := colorsort.Solve(level)
-	result := &model.SolveResult{
+	return &model.SolveResult{
 		Level:    levelID,
 		Solvable: res.Solvable,
 		Unknown:  res.Unknown,
-	}
-	if res.Solvable {
-		minMoves := int32(res.MinMoves)
-		result.MinMoves = &minMoves
-		if includePath != nil && *includePath {
-			path := make([]string, len(res.Path))
-			for i, m := range res.Path {
-				path[i] = fmt.Sprintf("%d-%d", m.From, m.To)
-			}
-			result.Path = path
-		}
-	}
-	return result, nil
+	}, nil
 }
 
 // Game is the resolver for the game field.
@@ -172,13 +164,52 @@ func (r *queryResolver) Game(ctx context.Context, id string) (*model.Game, error
 	return r.toModelGame(id, s), nil
 }
 
+// GameUpdated is the resolver for the gameUpdated field.
+func (r *subscriptionResolver) GameUpdated(ctx context.Context, gameID string) (<-chan *model.Game, error) {
+	r.mu.Lock()
+	_, ok := r.games[gameID]
+	r.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("game %q not found", gameID)
+	}
+
+	saves, unsubscribe := r.subscribe(gameID)
+	out := make(chan *model.Game, 1)
+
+	go func() {
+		defer close(out)
+		defer unsubscribe()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case g, ok := <-saves:
+				if !ok {
+					return
+				}
+				select {
+				case out <- g:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+
+	return out, nil
+}
+
 // Mutation returns MutationResolver implementation.
 func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
 
 // Query returns QueryResolver implementation.
 func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
 
+// Subscription returns SubscriptionResolver implementation.
+func (r *Resolver) Subscription() SubscriptionResolver { return &subscriptionResolver{r} }
+
 type (
-	mutationResolver struct{ *Resolver }
-	queryResolver    struct{ *Resolver }
+	mutationResolver     struct{ *Resolver }
+	queryResolver        struct{ *Resolver }
+	subscriptionResolver struct{ *Resolver }
 )

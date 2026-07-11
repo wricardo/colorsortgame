@@ -287,15 +287,14 @@ func TestQuerySolvable(t *testing.T) {
 	baseURL, cleanup := startTestServer(t)
 	defer cleanup()
 
-	query := `query solvable($levelId: Int!, $includePath: Boolean!) {
-		solvable(levelId: $levelId, includePath: $includePath) {
-			solvable unknown minMoves path
+	query := `query solvable($levelId: Int!) {
+		solvable(levelId: $levelId) {
+			solvable unknown
 		}
 	}`
 
-	// With path.
 	result := queryGraphQL(t, baseURL, query, map[string]interface{}{
-		"levelId": 1, "includePath": true,
+		"levelId": 1,
 	})
 
 	data, ok := result["data"].(map[string]interface{})
@@ -311,23 +310,8 @@ func TestQuerySolvable(t *testing.T) {
 	if !solveIface["solvable"].(bool) {
 		t.Fatal("expected solvable=true")
 	}
-	if solveIface["minMoves"].(float64) <= 0 {
-		t.Fatalf("expected minMoves > 0, got %v", solveIface["minMoves"])
-	}
-
-	path, ok := solveIface["path"].([]interface{})
-	if !ok || len(path) == 0 {
-		t.Fatal("expected path to be populated when includePath=true")
-	}
-
-	// Without path.
-	result = queryGraphQL(t, baseURL, query, map[string]interface{}{
-		"levelId": 1, "includePath": false,
-	})
-	data = result["data"].(map[string]interface{})
-	solveIface = data["solvable"].(map[string]interface{})
-	if solveIface["path"] != nil {
-		t.Fatalf("expected null path when includePath=false, got %v", solveIface["path"])
+	if solveIface["unknown"].(bool) {
+		t.Fatal("expected unknown=false")
 	}
 }
 
@@ -492,27 +476,13 @@ func TestSolvedGameCantMove(t *testing.T) {
 	newResult := queryGraphQL(t, baseURL, newQuery, map[string]interface{}{"levelId": 1})
 	gameID := newResult["data"].(map[string]interface{})["newGame"].(map[string]interface{})["id"].(string)
 
-	// Get solution
-	solveQuery := `query solvable($levelId: Int!, $includePath: Boolean!) {
-		solvable(levelId: $levelId, includePath: $includePath) { path }
-	}`
-	solveResult := queryGraphQL(t, baseURL, solveQuery, map[string]interface{}{
-		"levelId": 1, "includePath": true,
-	})
-	pathIface := solveResult["data"].(map[string]interface{})["solvable"].(map[string]interface{})["path"].([]interface{})
-	moves := ""
-	for i, m := range pathIface {
-		if i > 0 {
-			moves += ","
-		}
-		moves += m.(string)
-	}
-
-	// Solve it
+	// Solve with hardcoded moves for level 1
 	bulkQuery := `mutation moveBulk($id: ID!, $moves: String!) {
 		moveBulk(gameId: $id, moves: $moves) { solved }
 	}`
-	queryGraphQL(t, baseURL, bulkQuery, map[string]interface{}{"id": gameID, "moves": moves})
+	queryGraphQL(t, baseURL, bulkQuery, map[string]interface{}{
+		"id": gameID, "moves": "1-4,2-4,3-2,3-4,2-3,2-1,3-2,1-3",
+	})
 
 	// Try to move after solved
 	moveQuery := `mutation move($id: ID!, $from: Int!, $to: Int!) {
@@ -578,26 +548,11 @@ func TestResetSolvedGame(t *testing.T) {
 	newResult := queryGraphQL(t, baseURL, newQuery, map[string]interface{}{"levelId": 1})
 	gameID := newResult["data"].(map[string]interface{})["newGame"].(map[string]interface{})["id"].(string)
 
-	// Solve it
-	solveQuery := `query solvable($levelId: Int!, $includePath: Boolean!) {
-		solvable(levelId: $levelId, includePath: $includePath) { path }
-	}`
-	solveResult := queryGraphQL(t, baseURL, solveQuery, map[string]interface{}{
-		"levelId": 1, "includePath": true,
-	})
-	pathIface := solveResult["data"].(map[string]interface{})["solvable"].(map[string]interface{})["path"].([]interface{})
-	moves := ""
-	for i, m := range pathIface {
-		if i > 0 {
-			moves += ","
-		}
-		moves += m.(string)
-	}
-
+	// Solve with hardcoded moves for level 1
 	bulkQuery := `mutation moveBulk($id: ID!, $moves: String!) {
 		moveBulk(gameId: $id, moves: $moves) { solved }
 	}`
-	queryGraphQL(t, baseURL, bulkQuery, map[string]interface{}{"id": gameID, "moves": moves})
+	queryGraphQL(t, baseURL, bulkQuery, map[string]interface{}{"id": gameID, "moves": "1-4,2-4,3-2,3-4,2-3,2-1,3-2,1-3"})
 
 	// Reset
 	resetQuery := `mutation resetGame($id: ID!) {
@@ -624,11 +579,11 @@ func TestSolvableUnsolvableLevel(t *testing.T) {
 
 	// Create a stuck level (can't be solved). We'll construct one manually.
 	// But since all bundled levels are solvable, we just verify a valid level is solvable.
-	query := `query solvable($levelId: Int!, $includePath: Boolean!) {
-		solvable(levelId: $levelId, includePath: $includePath) { solvable unknown }
+	query := `query solvable($levelId: Int!) {
+		solvable(levelId: $levelId) { solvable unknown }
 	}`
 	result := queryGraphQL(t, baseURL, query, map[string]interface{}{
-		"levelId": 1, "includePath": false,
+		"levelId": 1,
 	})
 
 	solveIface := result["data"].(map[string]interface{})["solvable"].(map[string]interface{})
@@ -651,14 +606,14 @@ func TestSolveLevel1EndToEnd(t *testing.T) {
 	newResult := queryGraphQL(t, baseURL, newQuery, map[string]interface{}{"levelId": 1})
 	gameID := newResult["data"].(map[string]interface{})["newGame"].(map[string]interface{})["id"].(string)
 
-	// Get solution path.
-	solveQuery := `query solvable($levelId: Int!, $includePath: Boolean!) {
-		solvable(levelId: $levelId, includePath: $includePath) {
-			solvable minMoves path
+	// Verify level 1 is solvable.
+	solveQuery := `query solvable($levelId: Int!) {
+		solvable(levelId: $levelId) {
+			solvable unknown
 		}
 	}`
 	solveResult := queryGraphQL(t, baseURL, solveQuery, map[string]interface{}{
-		"levelId": 1, "includePath": true,
+		"levelId": 1,
 	})
 
 	solveData := solveResult["data"].(map[string]interface{})
@@ -668,28 +623,14 @@ func TestSolveLevel1EndToEnd(t *testing.T) {
 		t.Fatal("level 1 should be solvable")
 	}
 
-	pathIface := solveIface["path"].([]interface{})
-	if len(pathIface) == 0 {
-		t.Fatal("solution path should not be empty")
-	}
-
-	// Convert path to moves string (e.g., ["1-4", "2-4"] -> "1-4,2-4")
-	moves := ""
-	for i, m := range pathIface {
-		if i > 0 {
-			moves += ","
-		}
-		moves += m.(string)
-	}
-
-	// Execute solution.
+	// Execute hardcoded solution for level 1.
 	bulkQuery := `mutation moveBulk($id: ID!, $moves: String!) {
 		moveBulk(gameId: $id, moves: $moves) {
 			moves solved stuck
 		}
 	}`
 	bulkResult := queryGraphQL(t, baseURL, bulkQuery, map[string]interface{}{
-		"id": gameID, "moves": moves,
+		"id": gameID, "moves": "1-4,2-4,3-2,3-4,2-3,2-1,3-2,1-3",
 	})
 
 	bulkData := bulkResult["data"].(map[string]interface{})
@@ -703,9 +644,8 @@ func TestSolveLevel1EndToEnd(t *testing.T) {
 		t.Fatal("expected stuck=false after executing solution")
 	}
 
-	expectedMoves := int(solveIface["minMoves"].(float64))
 	actualMoves := int(gameIface["moves"].(float64))
-	if actualMoves != expectedMoves {
-		t.Fatalf("expected moves=%d, got %d", expectedMoves, actualMoves)
+	if actualMoves != 8 {
+		t.Fatalf("expected moves=8 for level 1, got %d", actualMoves)
 	}
 }

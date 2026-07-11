@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/wricardo/colorsortgame"
@@ -21,10 +23,40 @@ type Client struct {
 	closer func() error
 }
 
+// normalizeGraphQLURL ensures the URL points to the GraphQL endpoint.
+func normalizeGraphQLURL(apiURL string) (string, error) {
+	apiURL = strings.TrimSpace(apiURL)
+
+	// Add scheme if missing
+	if !strings.Contains(apiURL, "://") {
+		apiURL = "http://" + apiURL
+	}
+
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+
+	path := strings.TrimSuffix(u.Path, "/")
+	// If path already ends with /query, use as-is
+	if strings.HasSuffix(path, "/query") {
+		u.Path = path
+	} else {
+		// Otherwise append /query
+		u.Path = path + "/query"
+	}
+
+	return u.String(), nil
+}
+
 // New creates a client. If apiURL is empty, spawns a local ephemeral server.
 func New(apiURL string) (*Client, error) {
 	if apiURL != "" {
-		return &Client{URL: apiURL}, nil
+		normalized, err := normalizeGraphQLURL(apiURL)
+		if err != nil {
+			return nil, err
+		}
+		return &Client{URL: normalized}, nil
 	}
 
 	// Spawn ephemeral server on random port.
@@ -142,10 +174,8 @@ type GraphQLLevel struct {
 }
 
 type GraphQLSolveResult struct {
-	Solvable bool     `json:"solvable"`
-	Unknown  bool     `json:"unknown"`
-	MinMoves int      `json:"minMoves"`
-	Path     []string `json:"path"`
+	Solvable bool `json:"solvable"`
+	Unknown  bool `json:"unknown"`
 }
 
 // ToSave converts a GraphQL Game to a colorsort.Save for display.

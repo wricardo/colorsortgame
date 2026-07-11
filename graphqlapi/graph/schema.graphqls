@@ -20,8 +20,6 @@ type SolveResult {
   level: Int!
   solvable: Boolean!
   unknown: Boolean!
-  minMoves: Int
-  path: [String!]
 }
 
 type Game {
@@ -39,7 +37,7 @@ type Game {
 type Query {
   levels(difficulty: Difficulty): [Level!]!
   level(id: Int!): Level
-  solvable(levelId: Int!, includePath: Boolean = false): SolveResult!
+  solvable(levelId: Int!): SolveResult!
   game(id: ID!): Game
 }
 
@@ -49,4 +47,8 @@ type Mutation {
   moveBulk(gameId: ID!, moves: String!): Game!
   undo(gameId: ID!): Game!
   resetGame(gameId: ID!): Game!
+}
+
+type Subscription {
+  gameUpdated(gameId: ID!): Game!
 }
