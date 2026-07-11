@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/wricardo/colorsortgame"
+	"github.com/wricardo/colorsortgame/graphqlapi"
 )
 
 // jsonOut is set from each subcommand's --json flag right after parsing, so
@@ -106,6 +107,11 @@ Commands:
   show / status
         Print the current board without changing anything.
         Flags: --save PATH, --json
+
+  serve
+        Start an HTTP server exposing a GraphQL API and a static web UI for
+        the game, backed by the embedded level set. Blocks until stopped.
+        Flags: --port N (default 8080)
 
 Global notes:
   --json on any command prints structured JSON on stdout instead of the
@@ -324,6 +330,15 @@ func main() {
 				fmt.Printf("level %d [%s]: %d tubes, capacity %d\n", l.ID, l.Difficulty, len(l.Tubes), l.Capacity)
 			}
 		})
+
+	case "serve":
+		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		port := fs.String("port", "8080", "port to listen on")
+		_ = fs.Parse(args)
+
+		if err := graphqlapi.Serve(*port); err != nil {
+			fail(err)
+		}
 
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q, run 'colorsort help' for usage\n", cmd)

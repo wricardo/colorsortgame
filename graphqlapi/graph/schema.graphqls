@@ -1,0 +1,52 @@
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+type Level {
+  id: Int!
+  difficulty: Difficulty!
+  tubeCapacity: Int!
+  tubes: [[String!]!]!
+}
+
+type Move {
+  from: Int!
+  to: Int!
+}
+
+type SolveResult {
+  level: Int!
+  solvable: Boolean!
+  unknown: Boolean!
+  minMoves: Int
+  path: [String!]
+}
+
+type Game {
+  id: ID!
+  levelId: Int!
+  difficulty: Difficulty!
+  capacity: Int!
+  tubes: [[String!]!]!
+  moves: Int!
+  history: [Move!]!
+  solved: Boolean!
+  stuck: Boolean!
+}
+
+type Query {
+  levels(difficulty: Difficulty): [Level!]!
+  level(id: Int!): Level
+  solvable(levelId: Int!, includePath: Boolean = false): SolveResult!
+  game(id: ID!): Game
+}
+
+type Mutation {
+  newGame(levelId: Int!): Game!
+  move(gameId: ID!, from: Int!, to: Int!): Game!
+  moveBulk(gameId: ID!, moves: String!): Game!
+  undo(gameId: ID!): Game!
+  resetGame(gameId: ID!): Game!
+}

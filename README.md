@@ -81,6 +81,7 @@ known 8-move solution (see `colorsort solvable --level 1 --path`) in one call.
 | `move-bulk --moves "1-4,2-3,3-1"` | Apply a comma-separated sequence of moves in order |
 | `undo` | Undo the last move |
 | `show` / `status` | Print the current board without changing anything |
+| `serve --port N` | Start an HTTP server with a GraphQL API and a web UI (default port 8080) |
 
 All commands accept `--save PATH` (default `./save.json`); `list`, `solvable`,
 `new`, and `reset` also accept `--levels PATH` (default: the embedded
@@ -169,12 +170,57 @@ guaranteed solvable on its own — verify each candidate with
 go run ./cmd/gen -id 42 -difficulty medium -colors 5 -capacity 4 -empty 2 -seed 7
 ```
 
+## GraphQL API and web UI
+
+```sh
+./colorsort serve --port 8080
+```
+
+Serves three routes:
+
+- `/` — a static web UI (embedded via `go:embed`): pick a level, click a tube
+  to select it as the pour source, click another to pour into it
+- `/query` — the GraphQL API
+- `/playground` — a GraphQL playground for exploring the schema and running
+  queries by hand
+
+Games are stateful, held in memory on the server and keyed by an id returned
+from `newGame` — there's no equivalent of `--save PATH` here since a single
+server can host many concurrent games. Queries: `levels`, `level`,
+`solvable`, `game`. Mutations: `newGame`, `move`, `moveBulk`, `undo`,
+`resetGame`. Only the embedded level set is available over GraphQL (no
+`--levels` equivalent).
+
+The implementation lives in `graphqlapi/` (gqlgen, schema-first): schema in
+`graphqlapi/graph/schema.graphqls`, resolvers in
+`graphqlapi/graph/schema.resolvers.go`, UI assets in `graphqlapi/static/`.
+
+### Running via mise
+
+```sh
+mise run serve   # ./colorsort serve
+mise run build   # build the CLI binary
+mise run test    # go vet + golangci-lint
+```
+
+## Tests
+
+```sh
+go test ./...
+```
+
+Covers move legality, win/stuck detection, undo, the BFS solver (including
+replaying its returned path to confirm it actually solves), and re-verifies
+that every bundled level is solvable — so a bad edit to `levels.json` fails
+the test suite instead of shipping silently.
+
 ## Architecture
 
 The root package (`github.com/wricardo/colorsortgame`) is a library with no
 CLI or I/O side effects beyond explicit `Load*`/`Write*` helpers — it can be
 imported and driven programmatically. `cmd/colorsort` is the CLI built on
-top of it; `cmd/gen` is a standalone level-authoring tool.
+top of it (including `serve`, which starts the `graphqlapi` package's HTTP
+server); `cmd/gen` is a standalone level-authoring tool.
 
 ## License
 

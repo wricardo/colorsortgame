@@ -1,0 +1,14 @@
+[tools]
+go = "1.25"
+
+[tasks.serve]
+description = "Run the GraphQL API + web UI"
+run = "go run ./cmd/colorsort serve"
+
+[tasks.build]
+description = "Build the colorsort CLI"
+run = "go build -o colorsort ./cmd/colorsort"
+
+[tasks.test]
+description = "Vet and lint the whole repo"
+run = ["go vet ./...", "golangci-lint run ./..."]
