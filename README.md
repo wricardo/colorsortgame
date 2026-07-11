@@ -8,6 +8,10 @@ process. Game state lives entirely in a JSON save file, read and rewritten
 on each call, so the game can be scripted, tested, or driven by any tool
 that can shell out and read JSON.
 
+The bundled 30-level set is compiled into the binary (`go:embed`), so a
+single binary runs anywhere with no extra files — pass `--levels PATH` to
+use a different level set instead.
+
 ## Install
 
 ```sh
@@ -79,7 +83,8 @@ known 8-move solution (see `colorsort solvable --level 1 --path`) in one call.
 | `show` / `status` | Print the current board without changing anything |
 
 All commands accept `--save PATH` (default `./save.json`); `list`, `solvable`,
-`new`, and `reset` also accept `--levels PATH` (default `./levels.json`).
+`new`, and `reset` also accept `--levels PATH` (default: the embedded
+30-level set; pass a path to load a different `levels.json` instead).
 
 ### `--json`
 
@@ -121,9 +126,11 @@ full with a single color.
 
 ## Levels
 
-`levels.json` bundles all levels; `new`/`reset` load one by `--level` id.
-The bundled set (`levels.json` at the repo root) has 30 levels split into
-three difficulty tiers:
+`levels.json` (repo root) bundles all levels and is compiled into the binary
+via `go:embed` (see `levels.go`); `new`/`reset`/`solvable`/`list` load a
+level by `--level` id from the embedded set unless `--levels PATH` points at
+a different file. The bundled set has 30 levels split into three difficulty
+tiers:
 
 - **easy** (1-10) — 3 colors, 5 tubes, solvable in 5-10 moves
 - **medium** (11-20) — 5 colors, 7 tubes, solvable in 11-17 moves

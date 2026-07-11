@@ -166,7 +166,7 @@ func (s *Save) Undo() error {
 	}
 	// replay history minus last move onto a fresh copy is simplest & safest.
 	last := s.History[:len(s.History)-1]
-	lf, err := LoadLevels(s.LevelsPath)
+	lf, err := LoadLevelsOrDefault(s.LevelsPath)
 	if err != nil {
 		return err
 	}

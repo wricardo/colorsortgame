@@ -53,27 +53,31 @@ Every command is a single, independent invocation: it loads ./save.json (or
 --save PATH), applies one action, writes the result back, and exits. There
 is no REPL and no long-running process.
 
+The bundled 30-level set is compiled into the binary, so it runs standalone
+with no external files needed; pass --levels PATH to use a different file.
+
 Usage:
   colorsort <command> [flags]
 
 Commands:
   list
-        List every level in levels.json: id, difficulty, tube count, capacity.
-        Flags: --levels PATH (default ./levels.json), --json
+        List every level: id, difficulty, tube count, capacity.
+        Flags: --levels PATH (default: embedded levels), --json
 
   solvable --level N [--path]
         Run an exhaustive search to determine whether level N is solvable,
         without touching any save file. Exit code 0 if solvable, 1 if
         provably not solvable, 2 if the search-state cap was hit before a
         definitive answer (see SolveStateCap).
-        Flags: --level N (required), --levels PATH, --path (also print a
-        shortest solving move sequence), --json
+        Flags: --level N (required), --levels PATH (default: embedded
+        levels), --path (also print a shortest solving move sequence), --json
 
   new --level N
         Start level N: runs the same solvability search as 'solvable' first
         and refuses to start (exit 1) if the level is provably unsolvable.
         Writes a fresh save file, overwriting any existing one.
-        Flags: --level N (required), --levels PATH, --save PATH, --json
+        Flags: --level N (required), --levels PATH (default: embedded
+        levels), --save PATH, --json
 
   reset --level N
         Alias for 'new' — restart level N from scratch.
@@ -130,13 +134,13 @@ func main() {
 	case "new", "reset":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 		levelID := fs.Int("level", 0, "level id to load")
-		levelsPath := fs.String("levels", "./levels.json", "path to levels.json")
+		levelsPath := fs.String("levels", "", "path to a levels.json file (default: embedded 30-level set)")
 		savePath := fs.String("save", "./save.json", "path to save.json")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
 		_ = fs.Parse(args)
 		jsonOut = *asJSON
 
-		lf, err := colorsort.LoadLevels(*levelsPath)
+		lf, err := colorsort.LoadLevelsOrDefault(*levelsPath)
 		if err != nil {
 			fail(err)
 		}
@@ -259,13 +263,13 @@ func main() {
 	case "solvable":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 		levelID := fs.Int("level", 0, "level id to check")
-		levelsPath := fs.String("levels", "./levels.json", "path to levels.json")
+		levelsPath := fs.String("levels", "", "path to a levels.json file (default: embedded 30-level set)")
 		showPath := fs.Bool("path", false, "print the shortest solving move sequence")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
 		_ = fs.Parse(args)
 		jsonOut = *asJSON
 
-		lf, err := colorsort.LoadLevels(*levelsPath)
+		lf, err := colorsort.LoadLevelsOrDefault(*levelsPath)
 		if err != nil {
 			fail(err)
 		}
@@ -306,12 +310,12 @@ func main() {
 
 	case "list":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		levelsPath := fs.String("levels", "./levels.json", "path to levels.json")
+		levelsPath := fs.String("levels", "", "path to a levels.json file (default: embedded 30-level set)")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
 		_ = fs.Parse(args)
 		jsonOut = *asJSON
 
-		lf, err := colorsort.LoadLevels(*levelsPath)
+		lf, err := colorsort.LoadLevelsOrDefault(*levelsPath)
 		if err != nil {
 			fail(err)
 		}
