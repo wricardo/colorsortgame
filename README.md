@@ -32,6 +32,39 @@ go build -o colorsort ./cmd/colorsort
 ./colorsort undo                      # undo the last move
 ```
 
+## Example: playing level 1
+
+```console
+$ ./colorsort new --level 1
+Level 1 | moves: 0 | solved: false
+ 1: [red red green green]
+ 2: [blue red blue green]
+ 3: [red blue green blue]
+ 4: []
+ 5: []
+
+$ ./colorsort move --from 1 --to 4
+Level 1 | moves: 1 | solved: false
+ 1: [red red]
+ 2: [blue red blue green]
+ 3: [red blue green blue]
+ 4: [green green]
+ 5: []
+
+$ ./colorsort move-bulk --moves "2-4,3-2,3-4,2-3,2-1,3-2,1-3"
+Level 1 | moves: 8 | solved: true
+ 1: []
+ 2: [blue blue blue blue]
+ 3: [red red red red]
+ 4: [green green green green]
+ 5: []
+*** YOU WIN ***
+```
+
+Each command reads `./save.json`, applies one action, writes it back, and
+exits — `move-bulk` here just applies the remaining 7 moves of the level's
+known 8-move solution (see `colorsort solvable --level 1 --path`) in one call.
+
 ## Commands
 
 | Command | Description |
