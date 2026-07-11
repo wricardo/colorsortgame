@@ -28,7 +28,7 @@ func New(apiURL string) (*Client, error) {
 	}
 
 	// Spawn ephemeral server on random port.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		return nil, fmt.Errorf("listen on random port: %w", err)
 	}
@@ -40,11 +40,11 @@ func New(apiURL string) (*Client, error) {
 		return nil, fmt.Errorf("create handler: %w", err)
 	}
 
-	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux}
+	server := &http.Server{Addr: fmt.Sprintf("0.0.0.0:%d", port), Handler: mux}
 	go server.ListenAndServe()
 
-	// Wait for server to be ready.
-	url := fmt.Sprintf("http://127.0.0.1:%d/query", port)
+	// Wait for server to be ready (connect to localhost, not 0.0.0.0).
+	url := fmt.Sprintf("http://localhost:%d/query", port)
 	for i := 0; i < 10; i++ {
 		resp, err := http.Get(url)
 		if err == nil {
