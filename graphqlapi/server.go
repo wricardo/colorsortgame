@@ -21,12 +21,12 @@ import (
 //go:embed static
 var staticFiles embed.FS
 
-// Serve starts the GraphQL API and static UI on the given port, blocking
-// until the server stops or fails.
-func Serve(port string) error {
+// Handler returns an http.Handler for the GraphQL API and static UI.
+// Used by both Serve and the CLI's ephemeral server spawning.
+func Handler() (http.Handler, error) {
 	resolver, err := graph.NewResolver()
 	if err != nil {
-		return fmt.Errorf("load resolver: %w", err)
+		return nil, fmt.Errorf("load resolver: %w", err)
 	}
 
 	srv := handler.New(graph.NewExecutableSchema(graph.Config{Resolvers: resolver}))
@@ -44,13 +44,24 @@ func Serve(port string) error {
 
 	static, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		return fmt.Errorf("load static assets: %w", err)
+		return nil, fmt.Errorf("load static assets: %w", err)
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.FS(static)))
 	mux.Handle("/playground", playground.Handler("GraphQL playground", "/query"))
 	mux.Handle("/query", srv)
+
+	return mux, nil
+}
+
+// Serve starts the GraphQL API and static UI on the given port, blocking
+// until the server stops or fails.
+func Serve(port string) error {
+	mux, err := Handler()
+	if err != nil {
+		return err
+	}
 
 	log.Printf("UI at http://localhost:%s/, GraphQL playground at http://localhost:%s/playground", port, port)
 	return http.ListenAndServe(":"+port, mux)

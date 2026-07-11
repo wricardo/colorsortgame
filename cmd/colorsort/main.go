@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -50,77 +51,61 @@ type solvableResult struct {
 
 const usage = `colorsort - non-interactive water-sort puzzle CLI
 
-Every command is a single, independent invocation: it loads ./save.json (or
---save PATH), applies one action, writes the result back, and exits. There
-is no REPL and no long-running process.
-
-The bundled 30-level set is compiled into the binary, so it runs standalone
-with no external files needed; pass --levels PATH to use a different file.
+Every command is a single, independent invocation backed by a GraphQL API.
+Commands either connect to a remote GraphQL server (--api URL) or spawn an
+ephemeral local server (default). There is no REPL, no long-running process,
+and no save.json file—games are identified by UUID and held in memory.
 
 Usage:
   colorsort <command> [flags]
 
+Global flags:
+  --api URL    point to a running GraphQL server (default: spawn ephemeral local server)
+
 Commands:
   list
         List every level: id, difficulty, tube count, capacity.
-        Flags: --levels PATH (default: embedded levels), --json
+        Flags: --json
 
   solvable --level N [--path]
-        Run an exhaustive search to determine whether level N is solvable,
-        without touching any save file. Exit code 0 if solvable, 1 if
-        provably not solvable, 2 if the search-state cap was hit before a
-        definitive answer (see SolveStateCap).
-        Flags: --level N (required), --levels PATH (default: embedded
-        levels), --path (also print a shortest solving move sequence), --json
+        Query the API: is level N solvable? Exit code 0 if solvable, 1 if
+        provably not, 2 if the search-state cap was hit.
+        Flags: --level N (required), --path (also print move sequence), --json
 
   new --level N
-        Start level N: runs the same solvability search as 'solvable' first
-        and refuses to start (exit 1) if the level is provably unsolvable.
-        Writes a fresh save file, overwriting any existing one.
-        Flags: --level N (required), --levels PATH (default: embedded
-        levels), --save PATH, --json
+        Create a new game on level N. API checks solvability first and refuses
+        to start if provably unsolvable.
+        Flags: --level N (required), --json
 
-  reset --level N
-        Alias for 'new' — restart level N from scratch.
-        Flags: same as 'new'.
+  reset --game-id UUID
+        Reset a game to level start, clearing all moves and history.
+        Flags: --game-id UUID (required), --json
 
-  move --from A --to B
-        Pour tube A onto tube B (1-indexed). Moves the contiguous run of
-        same-colored segments off the top of A onto B, limited by B's
-        remaining capacity; legal only if B is empty or its top segment
-        matches A's top color. Exit code 2 if this move leaves the board
-        stuck (no legal moves remain and it isn't solved).
-        Flags: --from N (required), --to N (required), --save PATH, --json
+  move --game-id UUID --from A --to B
+        Pour tube A onto tube B (1-indexed). Exit code 2 if stuck after move.
+        Flags: --game-id UUID (required), --from N (required), --to N (required), --json
 
-  move-bulk --moves "1-4,2-3,3-1"
-        Apply a comma-separated sequence of from-to move tuples in order.
-        Stops at the first illegal move, still persists progress made up to
-        that point, and reports which move (1-indexed within the batch)
-        failed. Also stops early if the board becomes solved or stuck.
-        Exit code 2 if stuck.
-        Flags: --moves "A-B,C-D,..." (required), --save PATH, --json
+  move-bulk --game-id UUID --moves "1-4,2-3,3-1"
+        Apply comma-separated move sequence. Stops at first illegal move or
+        solved/stuck state. Exit code 2 if stuck.
+        Flags: --game-id UUID (required), --moves "..." (required), --json
 
-  undo
-        Undo the last move by replaying history from the level's start.
-        Flags: --save PATH, --json
+  undo --game-id UUID
+        Undo the last move in a game.
+        Flags: --game-id UUID (required), --json
 
-  show / status
-        Print the current board without changing anything.
-        Flags: --save PATH, --json
+  show / status --game-id UUID
+        Print the current board.
+        Flags: --game-id UUID (required), --json
 
   serve
-        Start an HTTP server exposing a GraphQL API and a static web UI for
-        the game, backed by the embedded level set. Blocks until stopped.
+        Start a standalone GraphQL API and web UI server. Blocks until stopped.
         Flags: --port N (default 8080)
 
 Global notes:
-  --json on any command prints structured JSON on stdout instead of the
-  text board (the full Save object for game commands, a
-  {level,solvable,unknown,min_moves,path} object for 'solvable', or the
-  level array for 'list'). Errors are emitted as {"error": "..."} on
-  stderr too when --json is set. Exit codes are unchanged either way.
-
-  Run 'colorsort <command> -h' for that command's flag list.
+  Games are stateful and held in memory; each game has a UUID returned by new.
+  --json prints structured JSON on stdout. Errors are emitted as {"error": "..."}
+  on stderr when --json is set. Exit codes: 0=success, 1=error, 2=stuck.
 `
 
 func main() {
@@ -129,176 +114,403 @@ func main() {
 		os.Exit(1)
 	}
 
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	// Parse --api flag globally from the beginning.
+	apiURL := ""
+	args := os.Args[1:]
+	if len(args) >= 2 && args[0] == "--api" {
+		apiURL = args[1]
+		args = args[2:]
+	}
 
-	switch cmd {
-	case "help", "-h", "--help":
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		os.Exit(1)
+	}
+
+	cmd := args[0]
+	argsAfterCmd := args[1:]
+
+	// Commands that don't need a client: help, serve.
+	if cmd == "help" || cmd == "-h" || cmd == "--help" {
 		fmt.Print(usage)
 		return
+	}
 
-	case "new", "reset":
+	if cmd == "serve" {
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		levelID := fs.Int("level", 0, "level id to load")
-		levelsPath := fs.String("levels", "", "path to a levels.json file (default: embedded 30-level set)")
-		savePath := fs.String("save", "./save.json", "path to save.json")
+		port := fs.String("port", "8080", "port to listen on")
+		_ = fs.Parse(argsAfterCmd)
+		if err := graphqlapi.Serve(*port); err != nil {
+			fail(err)
+		}
+		return
+	}
+
+	// All other commands need a client.
+	cli, err := New(apiURL)
+	if err != nil {
+		fail(err)
+	}
+	defer cli.Close()
+
+	switch cmd {
+
+	case "list":
+		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
+		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
 
-		lf, err := colorsort.LoadLevelsOrDefault(*levelsPath)
-		if err != nil {
-			fail(err)
-		}
-		level, err := colorsort.FindLevel(lf, *levelID)
+		ctx := context.Background()
+		resp, err := cli.Execute(ctx, `query { levels { id difficulty tubeCapacity tubes } }`, nil)
 		if err != nil {
 			fail(err)
 		}
 
-		res := colorsort.Solve(level)
-		if res.Unknown {
-			fmt.Fprintf(os.Stderr, "warning: solvability unknown (search cap of %d states reached), starting anyway\n", colorsort.SolveStateCap)
-		} else if !res.Solvable {
-			fail(fmt.Errorf("level %d is not solvable, refusing to start", *levelID))
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		levelsIface, ok := data["levels"].([]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid levels response"))
 		}
 
-		s := colorsort.NewSave(level, *levelsPath)
-		if err := colorsort.WriteSave(*savePath, s); err != nil {
+		var levels []GraphQLLevel
+		b, _ := json.Marshal(levelsIface)
+		if err := json.Unmarshal(b, &levels); err != nil {
 			fail(err)
 		}
-		output(*asJSON, s, func() { colorsort.PrintBoard(s) })
+
+		output(*asJSON, levels, func() {
+			for _, l := range levels {
+				fmt.Printf("level %d [%s]: %d tubes, capacity %d\n", l.ID, l.Difficulty, len(l.Tubes), l.TubeCapacity)
+			}
+		})
+
+	case "new":
+		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		levelID := fs.Int("level", 0, "level id to load")
+		asJSON := fs.Bool("json", false, "output JSON instead of text")
+		_ = fs.Parse(argsAfterCmd)
+		jsonOut = *asJSON
+
+		if *levelID <= 0 {
+			fail(fmt.Errorf("--level required"))
+		}
+
+		ctx := context.Background()
+		query := `mutation newGame($levelId: Int!) {
+			newGame(levelId: $levelId) {
+				id levelId difficulty capacity tubes moves solved stuck
+				history { from to }
+			}
+		}`
+		vars := map[string]interface{}{"levelId": *levelID}
+		resp, err := cli.Execute(ctx, query, vars)
+		if err != nil {
+			fail(err)
+		}
+
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		gameIface, ok := data["newGame"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid newGame response"))
+		}
+
+		var game GraphQLGame
+		b, _ := json.Marshal(gameIface)
+		if err := json.Unmarshal(b, &game); err != nil {
+			fail(err)
+		}
+
+		save := game.ToSave()
+		output(*asJSON, gameIface, func() { colorsort.PrintBoard(save) })
+
+	case "reset":
+		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		gameID := fs.String("game-id", "", "game UUID")
+		asJSON := fs.Bool("json", false, "output JSON instead of text")
+		_ = fs.Parse(argsAfterCmd)
+		jsonOut = *asJSON
+
+		if *gameID == "" {
+			fail(fmt.Errorf("--game-id required"))
+		}
+
+		ctx := context.Background()
+		query := `mutation resetGame($id: ID!) {
+			resetGame(gameId: $id) {
+				id levelId difficulty capacity tubes moves solved stuck
+				history { from to }
+			}
+		}`
+		vars := map[string]interface{}{"id": *gameID}
+		resp, err := cli.Execute(ctx, query, vars)
+		if err != nil {
+			fail(err)
+		}
+
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		gameIface, ok := data["resetGame"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid resetGame response"))
+		}
+
+		var game GraphQLGame
+		b, _ := json.Marshal(gameIface)
+		if err := json.Unmarshal(b, &game); err != nil {
+			fail(err)
+		}
+
+		save := game.ToSave()
+		output(*asJSON, gameIface, func() { colorsort.PrintBoard(save) })
 
 	case "move":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		gameID := fs.String("game-id", "", "game UUID")
 		from := fs.Int("from", 0, "source tube (1-indexed)")
 		to := fs.Int("to", 0, "destination tube (1-indexed)")
-		savePath := fs.String("save", "./save.json", "path to save.json")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
+		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
 
-		s, err := colorsort.LoadSave(*savePath)
+		if *gameID == "" || *from <= 0 || *to <= 0 {
+			fail(fmt.Errorf("--game-id, --from, --to all required"))
+		}
+
+		ctx := context.Background()
+		query := `mutation move($id: ID!, $from: Int!, $to: Int!) {
+			move(gameId: $id, from: $from, to: $to) {
+				id levelId difficulty capacity tubes moves solved stuck
+				history { from to }
+			}
+		}`
+		vars := map[string]interface{}{"id": *gameID, "from": *from, "to": *to}
+		resp, err := cli.Execute(ctx, query, vars)
 		if err != nil {
 			fail(err)
 		}
-		if err := s.ApplyMove(*from, *to); err != nil {
+
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		gameIface, ok := data["move"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid move response"))
+		}
+
+		var game GraphQLGame
+		b, _ := json.Marshal(gameIface)
+		if err := json.Unmarshal(b, &game); err != nil {
 			fail(err)
 		}
-		if err := colorsort.WriteSave(*savePath, s); err != nil {
-			fail(err)
-		}
-		output(*asJSON, s, func() { colorsort.PrintBoard(s) })
-		if s.Stuck {
+
+		save := game.ToSave()
+		output(*asJSON, gameIface, func() { colorsort.PrintBoard(save) })
+		if save.Stuck {
 			os.Exit(2)
 		}
 
 	case "move-bulk":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
+		gameID := fs.String("game-id", "", "game UUID")
 		moves := fs.String("moves", "", "comma-separated from-to tuples, e.g. 1-4,2-3,3-1")
-		savePath := fs.String("save", "./save.json", "path to save.json")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
+		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
 
-		tuples, err := colorsort.ParseMoves(*moves)
+		if *gameID == "" || *moves == "" {
+			fail(fmt.Errorf("--game-id and --moves required"))
+		}
+
+		// Validate moves format early
+		_, err := colorsort.ParseMoves(*moves)
 		if err != nil {
 			fail(err)
 		}
 
-		s, err := colorsort.LoadSave(*savePath)
+		ctx := context.Background()
+		query := `mutation moveBulk($id: ID!, $moves: String!) {
+			moveBulk(gameId: $id, moves: $moves) {
+				id levelId difficulty capacity tubes moves solved stuck
+				history { from to }
+			}
+		}`
+
+		vars := map[string]interface{}{"id": *gameID, "moves": *moves}
+		resp, err := cli.Execute(ctx, query, vars)
 		if err != nil {
 			fail(err)
 		}
 
-		var applyErr error
-		var failedAt int
-		for i, m := range tuples {
-			if err := s.ApplyMove(m.From, m.To); err != nil {
-				applyErr = err
-				failedAt = i + 1
-				break
-			}
-			if s.Solved || s.Stuck {
-				break
-			}
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		gameIface, ok := data["moveBulk"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid moveBulk response"))
 		}
 
-		if err := colorsort.WriteSave(*savePath, s); err != nil {
+		var game GraphQLGame
+		b, _ := json.Marshal(gameIface)
+		if err := json.Unmarshal(b, &game); err != nil {
 			fail(err)
 		}
-		output(*asJSON, s, func() { colorsort.PrintBoard(s) })
-		if applyErr != nil {
-			fail(fmt.Errorf("move %d (%d-%d): %w", failedAt, tuples[failedAt-1].From, tuples[failedAt-1].To, applyErr))
-		}
-		if s.Stuck {
+
+		save := game.ToSave()
+		output(*asJSON, gameIface, func() { colorsort.PrintBoard(save) })
+		if save.Stuck {
 			os.Exit(2)
 		}
 
 	case "undo":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		savePath := fs.String("save", "./save.json", "path to save.json")
+		gameID := fs.String("game-id", "", "game UUID")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
+		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
 
-		s, err := colorsort.LoadSave(*savePath)
+		if *gameID == "" {
+			fail(fmt.Errorf("--game-id required"))
+		}
+
+		ctx := context.Background()
+		query := `mutation undo($id: ID!) {
+			undo(gameId: $id) {
+				id levelId difficulty capacity tubes moves solved stuck
+				history { from to }
+			}
+		}`
+		vars := map[string]interface{}{"id": *gameID}
+		resp, err := cli.Execute(ctx, query, vars)
 		if err != nil {
 			fail(err)
 		}
-		if err := s.Undo(); err != nil {
+
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		gameIface, ok := data["undo"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid undo response"))
+		}
+
+		var game GraphQLGame
+		b, _ := json.Marshal(gameIface)
+		if err := json.Unmarshal(b, &game); err != nil {
 			fail(err)
 		}
-		if err := colorsort.WriteSave(*savePath, s); err != nil {
-			fail(err)
-		}
-		output(*asJSON, s, func() { colorsort.PrintBoard(s) })
+
+		save := game.ToSave()
+		output(*asJSON, gameIface, func() { colorsort.PrintBoard(save) })
 
 	case "show", "status":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		savePath := fs.String("save", "./save.json", "path to save.json")
+		gameID := fs.String("game-id", "", "game UUID")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
+		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
 
-		s, err := colorsort.LoadSave(*savePath)
+		if *gameID == "" {
+			fail(fmt.Errorf("--game-id required"))
+		}
+
+		ctx := context.Background()
+		query := `query getGame($id: ID!) {
+			game(id: $id) {
+				id levelId difficulty capacity tubes moves solved stuck
+				history { from to }
+			}
+		}`
+		vars := map[string]interface{}{"id": *gameID}
+		resp, err := cli.Execute(ctx, query, vars)
 		if err != nil {
 			fail(err)
 		}
-		output(*asJSON, s, func() { colorsort.PrintBoard(s) })
+
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		gameIface, ok := data["game"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid game response"))
+		}
+
+		var game GraphQLGame
+		b, _ := json.Marshal(gameIface)
+		if err := json.Unmarshal(b, &game); err != nil {
+			fail(err)
+		}
+
+		save := game.ToSave()
+		output(*asJSON, save, func() { colorsort.PrintBoard(save) })
 
 	case "solvable":
 		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 		levelID := fs.Int("level", 0, "level id to check")
-		levelsPath := fs.String("levels", "", "path to a levels.json file (default: embedded 30-level set)")
 		showPath := fs.Bool("path", false, "print the shortest solving move sequence")
 		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
+		_ = fs.Parse(argsAfterCmd)
 		jsonOut = *asJSON
 
-		lf, err := colorsort.LoadLevelsOrDefault(*levelsPath)
-		if err != nil {
-			fail(err)
+		if *levelID <= 0 {
+			fail(fmt.Errorf("--level required"))
 		}
-		level, err := colorsort.FindLevel(lf, *levelID)
+
+		ctx := context.Background()
+		query := `query solvable($levelId: Int!, $includePath: Boolean!) {
+			solvable(levelId: $levelId, includePath: $includePath) {
+				solvable unknown minMoves path
+			}
+		}`
+		vars := map[string]interface{}{"levelId": *levelID, "includePath": *showPath}
+		resp, err := cli.Execute(ctx, query, vars)
 		if err != nil {
 			fail(err)
 		}
 
-		res := colorsort.Solve(level)
-		result := solvableResult{Level: *levelID, Solvable: res.Solvable, Unknown: res.Unknown, MinMoves: res.MinMoves}
-		if res.Solvable && *showPath {
-			result.Path = make([]string, len(res.Path))
-			for i, m := range res.Path {
-				result.Path[i] = fmt.Sprintf("%d-%d", m.From, m.To)
-			}
+		data, ok := resp["data"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid response"))
+		}
+		solveIface, ok := data["solvable"].(map[string]interface{})
+		if !ok {
+			fail(fmt.Errorf("invalid solvable response"))
+		}
+
+		var solve GraphQLSolveResult
+		b, _ := json.Marshal(solveIface)
+		if err := json.Unmarshal(b, &solve); err != nil {
+			fail(err)
+		}
+
+		result := solvableResult{
+			Level:    *levelID,
+			Solvable: solve.Solvable,
+			Unknown:  solve.Unknown,
+			MinMoves: solve.MinMoves,
+		}
+		if solve.Solvable && *showPath {
+			result.Path = solve.Path
 		}
 
 		output(*asJSON, result, func() {
 			switch {
-			case res.Unknown:
-				fmt.Printf("level %d: unknown (search cap of %d states reached)\n", *levelID, colorsort.SolveStateCap)
-			case res.Solvable:
-				fmt.Printf("level %d: solvable in %d moves\n", *levelID, res.MinMoves)
+			case solve.Unknown:
+				fmt.Printf("level %d: unknown\n", *levelID)
+			case solve.Solvable:
+				fmt.Printf("level %d: solvable in %d moves\n", *levelID, solve.MinMoves)
 				if *showPath {
 					fmt.Println(strings.Join(result.Path, ","))
 				}
@@ -308,36 +520,10 @@ func main() {
 		})
 
 		switch {
-		case res.Unknown:
+		case solve.Unknown:
 			os.Exit(2)
-		case !res.Solvable:
+		case !solve.Solvable:
 			os.Exit(1)
-		}
-
-	case "list":
-		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		levelsPath := fs.String("levels", "", "path to a levels.json file (default: embedded 30-level set)")
-		asJSON := fs.Bool("json", false, "output JSON instead of text")
-		_ = fs.Parse(args)
-		jsonOut = *asJSON
-
-		lf, err := colorsort.LoadLevelsOrDefault(*levelsPath)
-		if err != nil {
-			fail(err)
-		}
-		output(*asJSON, lf.Levels, func() {
-			for _, l := range lf.Levels {
-				fmt.Printf("level %d [%s]: %d tubes, capacity %d\n", l.ID, l.Difficulty, len(l.Tubes), l.Capacity)
-			}
-		})
-
-	case "serve":
-		fs := flag.NewFlagSet(cmd, flag.ExitOnError)
-		port := fs.String("port", "8080", "port to listen on")
-		_ = fs.Parse(args)
-
-		if err := graphqlapi.Serve(*port); err != nil {
-			fail(err)
 		}
 
 	default:
